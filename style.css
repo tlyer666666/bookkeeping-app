@@ -276,17 +276,7 @@ html[data-theme="dark"] {
 
 @media (max-width: 600px) {
   .tabs {
-    position: fixed; top: auto; bottom: 0; left: 0; right: 0; z-index: 20;
-    border-bottom: none; border-top: 1px solid var(--line);
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  main { padding-bottom: 84px; }
-  .tab { padding: 13px 0; }
-  input, select { font-size: 16px; }
-}
-
-@media (max-width: 600px) {
-  .tabs {
+    /* top:auto 必须有：桌面端 .tabs 是 sticky top:0，不清掉会和 fixed bottom:0 叠加，标签栏会盖住整屏 */
     position: fixed; top: auto; bottom: 0; left: 0; right: 0; z-index: 20;
     border-bottom: none; border-top: 1px solid var(--line);
     padding-bottom: env(safe-area-inset-bottom);
