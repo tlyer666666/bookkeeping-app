@@ -1,9 +1,11 @@
 # 记账管理系统
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/tlyer666666/bookkeeping-app/actions/workflows/ci.yml/badge.svg)](https://github.com/tlyer666666/bookkeeping-app/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Web%20%7C%20PWA-blue)](#快速开始)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Tests](https://img.shields.io/badge/tests-48%20passing-brightgreen)](#测试与质量)
+[![Download](https://img.shields.io/badge/下载-Releases-orange)](https://github.com/tlyer666666/bookkeeping-app/releases)
 
 一款**零依赖、本地优先**的个人记账应用。同一套代码覆盖三种形态：浏览器直接打开、PWA 安装到手机/电脑、Windows 独立桌面程序。数据全部保存在本机，不上传任何服务器。
 
@@ -43,6 +45,12 @@ npm install           # 安装 Electron（约 150MB，国内可设置镜像：
 npm start             # 启动桌面应用
 npm run dist          # 打包独立 exe 到 release/ 目录
 ```
+
+也可以直接到 [Releases](https://github.com/tlyer666666/bookkeeping-app/releases) 下载打包好的 `记账管理系统.exe`。
+
+## 贡献
+
+欢迎 Issue 与 PR，规范见 [CONTRIBUTING.md](CONTRIBUTING.md)；变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 项目结构
 
