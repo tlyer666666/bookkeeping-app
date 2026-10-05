@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ee6c4d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="记账">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>记账管理系统</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="storage-warn" class="storage-warn hidden">⚠️ 当前环境无法保存数据（可能是隐私模式或浏览器限制），本次记账不会被保留！</div>
+<div id="sync-warn" class="storage-warn hidden">🔄 数据已在其他窗口被修改。<button class="warn-btn" data-action="reload-app">刷新页面</button></div>
+
+<header class="topbar">
+  <div class="brand"><h1>📒 记账管理系统</h1></div>
+  <div class="month-nav">
+    <button class="btn-icon" data-action="prev-month" title="上个月">‹</button>
+    <span id="month-label">----</span>
+    <button class="btn-icon" data-action="next-month" title="下个月">›</button>
+  </div>
+  <button class="btn-icon" id="theme-toggle" data-action="cycle-theme" title="主题">🌓</button>
+  <button class="btn-primary" data-action="open-add">＋ 记一笔</button>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="detail">明细</button>
+  <button class="tab" data-tab="stats">统计</button>
+  <button class="tab" data-tab="budget">预算</button>
+  <button class="tab" data-tab="manage">管理</button>
+</nav>
+
+<main>
+  <section id="page-detail" class="page"></section>
+  <section id="page-stats" class="page hidden"></section>
+  <section id="page-budget" class="page hidden"></section>
+  <section id="page-manage" class="page hidden"></section>
+</main>
+
+<div id="tx-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><span id="tx-modal-title">记一笔</span><button class="modal-close" data-action="close-modal">×</button></div>
+    <form id="tx-form" autocomplete="off">
+      <div class="seg" id="tx-type">
+        <button type="button" data-tx-type="expense" class="active">支出</button>
+        <button type="button" data-tx-type="income">收入</button>
+        <button type="button" data-tx-type="transfer">转账</button>
+      </div>
+      <div class="field-row">
+        <label class="field">金额（元）<input id="tx-amount" type="text" inputmode="decimal" placeholder="0.00，支持 + - * /" required></label>
+        <label class="field">日期
+          <input id="tx-date" type="date" required>
+          <div class="date-quick">
+            <button type="button" data-action="date-today">今天</button>
+            <button type="button" data-action="date-yesterday">昨天</button>
+          </div>
+        </label>
+      </div>
+      <div id="tx-cat-group">
+        <div class="field-row">
+          <label class="field">分类<select id="tx-cat"></select></label>
+          <label class="field">子分类<select id="tx-sub"></select></label>
+        </div>
+        <div id="tx-sub-quick" class="quick-subs"></div>
+      </div>
+      <div id="tx-transfer-group" class="hidden">
+        <div class="field-row">
+          <label class="field">转出账户<select id="tx-from"></select></label>
+          <label class="field">转入账户<select id="tx-to"></select></label>
+        </div>
+      </div>
+      <div id="tx-account-group">
+        <label class="field">账户<select id="tx-account"></select></label>
+      </div>
+      <label class="field">备注<input id="tx-note" type="text" maxlength="50" placeholder="选填"></label>
+      <label class="field">标签<input id="tx-tags" type="text" maxlength="100" placeholder="选填，逗号分隔，最多 5 个"></label>
+      <div class="modal-actions">
+        <button type="button" id="tx-dup" class="btn hidden" data-action="duplicate-tx">存为副本</button>
+        <button type="button" id="tx-delete" class="btn-danger hidden" data-action="delete-tx">删除</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-action="close-modal">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="cat-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><span id="cat-modal-title">编辑分类</span><button class="modal-close" data-action="close-modal">×</button></div>
+    <form id="cat-form" autocomplete="off">
+      <div class="field-row">
+        <label class="field field-icon">图标<input id="cat-icon" type="text" maxlength="4" placeholder="🍜"></label>
+        <label class="field">分类名称<input id="cat-name" type="text" maxlength="10" required></label>
+      </div>
+      <div class="sub-editor">
+        <div class="sub-editor-head">子分类</div>
+        <div id="cat-subs"></div>
+        <div class="sub-add">
+          <input id="cat-new-sub" type="text" maxlength="10" placeholder="新增子分类名称">
+          <button type="button" class="btn" data-action="add-sub">添加</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-action="close-modal">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="acc-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><span id="acc-modal-title">编辑账户</span><button class="modal-close" data-action="close-modal">×</button></div>
+    <form id="acc-form" autocomplete="off">
+      <div class="field-row">
+        <label class="field field-icon">图标<input id="acc-icon" type="text" maxlength="4" placeholder="💰"></label>
+        <label class="field">账户名称<input id="acc-name" type="text" maxlength="10" required></label>
+      </div>
+      <label class="field">期初余额（元）<input id="acc-initial" type="text" inputmode="decimal" placeholder="0.00"></label>
+      <p class="hint">当前余额自动计算：期初余额 ＋ 收入 − 支出 ± 转账</p>
+      <div class="modal-actions">
+        <button type="button" id="acc-delete" class="btn-danger hidden" data-action="delete-acc">删除</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-action="close-modal">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="rec-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><span id="rec-modal-title">编辑周期记账</span><button class="modal-close" data-action="close-modal">×</button></div>
+    <form id="rec-form" autocomplete="off">
+      <div class="seg" id="rec-type">
+        <button type="button" data-rec-type="expense" class="active">支出</button>
+        <button type="button" data-rec-type="income">收入</button>
+        <button type="button" data-rec-type="transfer">转账</button>
+      </div>
+      <div class="field-row">
+        <label class="field">金额（元）<input id="rec-amount" type="text" inputmode="decimal" placeholder="0.00" required></label>
+        <label class="field">频率
+          <select id="rec-freq">
+            <option value="monthly">每月</option>
+            <option value="weekly">每周</option>
+            <option value="daily">每日</option>
+          </select>
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="field">下次生成日期<input id="rec-date" type="date" required></label>
+        <label class="field">备注<input id="rec-note" type="text" maxlength="50" placeholder="选填"></label>
+      </div>
+      <div id="rec-cat-group">
+        <div class="field-row">
+          <label class="field">分类<select id="rec-cat"></select></label>
+          <label class="field">子分类<select id="rec-sub"></select></label>
+        </div>
+      </div>
+      <div id="rec-transfer-group" class="hidden">
+        <div class="field-row">
+          <label class="field">转出账户<select id="rec-from"></select></label>
+          <label class="field">转入账户<select id="rec-to"></select></label>
+        </div>
+      </div>
+      <div id="rec-account-group">
+        <label class="field">账户<select id="rec-account"></select></label>
+      </div>
+      <p class="hint">到达日期后会自动生成这笔记录（补记最多 60 笔）。</p>
+      <div class="modal-actions">
+        <button type="button" id="rec-delete" class="btn-danger hidden" data-action="delete-rec">删除</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-action="close-modal">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="confirm-modal" class="modal hidden">
+  <div class="modal-box modal-box-small">
+    <p id="confirm-text"></p>
+    <div class="modal-actions">
+      <span class="spacer"></span>
+      <button class="btn" data-action="confirm-cancel">取消</button>
+      <button class="btn-danger" data-action="confirm-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<button id="back-top" class="hidden" data-action="back-top" title="回到顶部">↑</button>
+<pre id="selftest-result" class="hidden"></pre>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "bookkeeping-app",
+  "productName": "记账管理系统",
+  "version": "1.0.0",
+  "description": "零依赖本地记账应用（Windows 桌面版基于 Electron）",
+  "main": "desktop/main.js",
+  "scripts": {
+    "start": "electron .",
+    "selfcheck": "electron . --selfcheck",
+    "dist": "node tools/dist.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.5.1"
+  }
+}
