@@ -15,11 +15,6 @@ const { packager } = require('@electron/packager');
     icon: path.resolve('icons', 'icon.ico'),
     ignore: [
       /^\/release/,
-      /^\/\.zcode/,
-      /^\/\.mimosa/,
-      /^\/\.optimize-backup/,
-      /^\/\.chrome-bk-profile/,
-      /^\/docs/,
       /^\/tests/,
       /^\/tools/,
       /^\/nul$/,
