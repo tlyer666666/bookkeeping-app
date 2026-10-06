@@ -738,7 +738,7 @@ test('parseBillCsv：支付宝账单解析（元数据头、不计收支、退�
   assert.strictEqual(r.transactions.length, 2);
   assert.strictEqual(r.transactions[0].amount, 2550);
   assert.strictEqual(r.transactions[0].categoryId, 'e10');
-  assert.strictEqual(r.transactions[0].accountId, 'acc_cash', '无支付方式列时落到 fallback');
+  assert.strictEqual(r.transactions[0].accountId, 'acc_alipay', '支付宝账单优先落到同名账户');
   assert.strictEqual(r.transactions[1].type, 'income');
   assert.strictEqual(r.transactions[1].categoryId, 'i5');
 });

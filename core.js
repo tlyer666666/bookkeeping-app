@@ -281,7 +281,7 @@
       }
     }
     loadWithRecovery(key, fallback) {
-      let raw = null;
+      let raw;
       try { raw = this.backend.getItem(key); } catch (e) { return { value: fallback, corruptRaw: null }; }
       if (raw == null) return { value: fallback, corruptRaw: null };
       try {
@@ -538,26 +538,30 @@
     },
   };
 
-  function mapBillAccount(payName, accounts, fallbackAccountId) {
+  function mapBillAccount(payName, kind, accounts, fallbackAccountId) {
     const name = String(payName || '');
-    const named = accounts.find(a => a.name && a.name.length >= 2 && (name.indexOf(a.name) >= 0 || a.name.indexOf(name) >= 0 && name.length >= 2));
+    const named = accounts.find(a => a.name && a.name.length >= 2 && name.indexOf(a.name) >= 0);
     if (named) return named;
-    const keywords = ['微信', '零钱', '支付宝', '银行卡', '银行', '现金'];
+    const kindKw = kind === 'alipay' ? '支付宝' : '微信';
+    const keywords = [kindKw, '零钱', '银行卡', '银行', '现金'];
     for (const kw of keywords) {
       if (name.indexOf(kw) >= 0) {
         const acc = accounts.find(a => (a.name || '').indexOf(kw) >= 0);
         if (acc) return acc;
       }
     }
+    const kindAcc = accounts.find(a => (a.name || '').indexOf(kindKw) >= 0);
+    if (kindAcc) return kindAcc;
     return accounts.find(a => a.id === fallbackAccountId) || accounts[0] || null;
   }
 
   function parseBillCsv(text, kind, accounts, options) {
     options = options || {};
     const fallbackAccountId = options.fallbackAccountId || null;
+    const categories = Array.isArray(options.categories) && options.categories.length ? options.categories : DEFAULT_CATEGORIES;
     const bill = BILL_KINDS[kind];
     const errors = [];
-    if (!bill) return { ok: false, errors: [{ row: 0, message: '不支持的账单类型：' + kind }], transactions: [] };
+    if (!bill) return { ok: false, headerFound: false, errors: [{ row: 0, message: '不支持的账单类型：' + kind }], transactions: [] };
     const rows = parseCsvRows(String(text || '').replace(/^\uFEFF/, ''));
     let headerIdx = -1;
     for (let i = 0; i < rows.length; i++) {
@@ -565,7 +569,7 @@
       if (bill.requiredCols.every(w => h.indexOf(w) >= 0)) { headerIdx = i; break; }
     }
     if (headerIdx === -1) {
-      return { ok: false, errors: [{ row: 0, message: '未找到' + bill.name + '账单列头，请确认导出的原始账单文件' }], transactions: [] };
+      return { ok: false, headerFound: false, errors: [{ row: 0, message: '未找到' + bill.name + '账单列头，请确认导出的原始账单文件' }], transactions: [] };
     }
     const cols = rows[headerIdx].map(x => x.trim());
     const colIdx = name => cols.indexOf(name);
@@ -589,13 +593,17 @@
       const status = get(bill.statusCol);
       if (status && !bill.statusOk(status)) continue;
       const payName = bill.payCol ? get(bill.payCol) : '';
-      const acc = mapBillAccount(payName, accounts, fallbackAccountId);
+      const acc = mapBillAccount(payName, kind, accounts, fallbackAccountId);
       if (!acc) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行无法确定账户：' + payName }); continue; }
       const note = bill.noteCols.map(nc => get(nc)).filter(Boolean).join(' - ').slice(0, 200);
+      const defaultCat = type === 'income'
+        ? (categories.find(c => c.type === 'income' && c.id === 'i5') ? 'i5' : ((categories.find(c => c.type === 'income') || {}).id || null))
+        : (categories.find(c => c.type === 'expense' && c.id === 'e10') ? 'e10' : ((categories.find(c => c.type === 'expense') || {}).id || null));
+      if (!defaultCat) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行：当前没有可用的' + (type === 'income' ? '收入' : '支出') + '分类' }); continue; }
       const t = {
         id: genId('tx'),
         type, amount, date,
-        categoryId: type === 'income' ? 'i5' : 'e10',
+        categoryId: defaultCat,
         subcategoryId: null,
         accountId: acc.id,
         toAccountId: null,
@@ -603,11 +611,11 @@
         tags: [bill.name],
         createdAt: new Date().toISOString(),
       };
-      const v = validateTransaction(t, DEFAULT_CATEGORIES, accounts);
+      const v = validateTransaction(t, categories, accounts);
       if (!v.ok) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行：' + v.errors.join('；') }); continue; }
       out.push(t);
     }
-    return { ok: errors.length === 0, errors, transactions: out };
+    return { ok: errors.length === 0, headerFound: true, errors, transactions: out };
   }
 
   /* ================= 导入校验 ================= */
@@ -968,7 +976,6 @@ function csvCell(v) {
     categoryTotals, dailyTotals, monthlyTrend, budgetStatus, levelOf,
     withCategoryDelta, rankSubs, dailyInOut, yearStats,
     toCSV, parseCSV, CSV_HEADER,
-    detectBillKind, parseBillCsv, BILL_KINDS,
     detectBillKind, parseBillCsv, BILL_KINDS,
     generateDueRecurrings, RECURRING_FREQUENCIES,
     getCategories, findCategory, findSub, TX_TYPES,

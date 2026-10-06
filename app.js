@@ -182,6 +182,7 @@
     state.transactions = clean.transactions;
     state.accounts = clean.accounts;
     state.categories = clean.categories;
+    state.trash = state.trash.filter(t => t && typeof t === 'object' && Core.validateTransaction(t, state.categories, state.accounts).ok);
 
     const gen = Core.generateDueRecurrings(state.recurrings, Core.todayStr(), state.categories, state.accounts);
     state.recurrings = gen.recurrings;
@@ -295,10 +296,9 @@
   }
 
   function hi(text, kw) {
-    const e = esc(text);
-    if (!kw) return e;
-    const ek = esc(kw);
-    return ek ? e.split(ek).join('<mark>' + ek + '</mark>') : e;
+    if (!kw) return esc(text);
+    const parts = String(text).split(kw);
+    return parts.map(p => esc(p)).join('<mark>' + esc(kw) + '</mark>');
   }
 
   function catColor(id) {
@@ -358,6 +358,11 @@
       const v = parseFenAllowZero(state.filter.maxYuan);
       if (v != null) f.maxAmountFen = v;
     }
+    if (f.minAmountFen != null && f.maxAmountFen != null && f.minAmountFen > f.maxAmountFen) {
+      const swap = f.minAmountFen;
+      f.minAmountFen = f.maxAmountFen;
+      f.maxAmountFen = swap;
+    }
     return f;
   }
 
@@ -391,7 +396,9 @@
   }
 
   function renderTxList() {
-    $('#tx-list').innerHTML = txListHtml();
+    const listEl = $('#tx-list');
+    if (!listEl) return;
+    listEl.innerHTML = txListHtml();
   }
 
   function renderDetail() {
@@ -409,8 +416,8 @@
       .map(c => `<option value="${esc(c.id)}"${f.categoryId === c.id ? ' selected' : ''}>${esc(c.icon + ' ' + c.name)}</option>`).join('');
     const viewSeg = `
       <div class="view-seg">
-        <button data-view="list" class="${state.detailView === 'list' ? 'active' : ''}">列表</button>
-        <button data-view="calendar" class="${state.detailView === 'calendar' ? 'active' : ''}">日历</button>
+        <button data-action="data-view" data-view="list" class="${state.detailView === 'list' ? 'active' : ''}">列表</button>
+        <button data-action="data-view" data-view="calendar" class="${state.detailView === 'calendar' ? 'active' : ''}">日历</button>
       </div>`;
     $('#page-detail').innerHTML = `
       <div class="card summary-card">
@@ -805,6 +812,15 @@
     const shown = drillCat ? drillCat.subs : totals;
     const drillEmpty = drillCat && !drillCat.subs.length;
     const shownTotalFen = drillCat ? drillCat.amountFen : totalFen;
+    const statsYear = state.statsYear || Number(state.monthKey.slice(0, 4));
+    const yearData = Core.yearStats(state.transactions, statsYear);
+    const yearTop = yearData.topExpense.slice(0, 5).map(c => {
+      const cat = Core.findCategory(state.categories, c.categoryId);
+      return `<div class="manage-row"><span class="m-icon">${esc(cat ? cat.icon : '❓')}</span><span class="m-name">${esc(cat ? cat.name : c.categoryId)}</span><span class="m-actions">${yuan(c.amountFen)}</span></div>`;
+    }).join('');
+    const yearTopHtml = yearTop
+      ? '<h3>全年支出分类排行</h3><div class="manage-section">' + yearTop + '</div>'
+      : '<p class="hint">全年暂无支出记录</p>';
     const items = shown.map((c, i) => ({ label: c.name, value: c.amountFen, color: PALETTE[i % PALETTE.length] }));
     const deltaHtml = c => {
       if (c.deltaPct == null) return '<span class="delta">新</span>';
@@ -844,12 +860,27 @@
       </div>
       <div class="card stat-daily"><h3>每日支出</h3><canvas id="stats-daily" class="chart"></canvas></div>
       <div class="card stat-trend"><h3>近 6 个月收支趋势</h3>
-        <p class="hint"><span style="color:#e05656">■</span> 支出　<span style="color:#2f9e63">■</span> 收入</p>
+        <p class="hint"><span style="color:#e05656">■</span>&emsp;支出<span style="color:#2f9e63">■</span>&emsp;收入</p>
         <canvas id="stats-trend" class="chart"></canvas>
+      </div>
+      <div class="card stat-year">
+        <h3>${statsYear} 年度报告
+          <button class="btn-small btn" data-action="stats-year-prev" title="上一年">‹</button>
+          <button class="btn-small btn" data-action="stats-year-next" title="下一年">›</button>
+        </h3>
+        <div class="summary-card">
+          <div class="cell"><div class="label">全年收入</div><div class="num income">${yuan(yearData.incomeFen)}</div></div>
+          <div class="cell"><div class="label">全年支出</div><div class="num expense">${yuan(yearData.expenseFen)}</div></div>
+          <div class="cell"><div class="label">全年结余</div><div class="num">${yuan(yearData.balanceFen)}</div></div>
+          <div class="cell"><div class="label">月均支出</div><div class="num expense">${yuan(Math.round(yearData.expenseFen / 12))}</div></div>
+        </div>
+        <canvas id="stats-year" class="chart"></canvas>
+        ${yearTopHtml}
       </div>`;
     drawDonut($('#stats-donut'), items, drillEmpty ? '该分类未使用子分类' : undefined);
     drawBars($('#stats-daily'), Core.dailyTotals(state.transactions, state.monthKey).map(d => ({ label: d.day, value: d.amountFen })), '#e05656');
     drawPairedBars($('#stats-trend'), Core.monthlyTrend(state.transactions, state.monthKey, 6));
+    drawBars($('#stats-year'), yearData.monthly.map(m => ({ label: Number(m.monthKey.slice(5)), value: m.expenseFen })), '#e05656');
   }
 
   /* ================= 预算页 ================= */
@@ -1078,7 +1109,8 @@
 
   function onDeleteCat(id) {
     const refs = state.transactions.filter(t => t.categoryId === id).length
-      + state.recurrings.filter(r => r.categoryId === id).length;
+      + state.recurrings.filter(r => r.categoryId === id).length
+      + state.trash.filter(t => t.categoryId === id).length;
     if (refs > 0) { toast(`有 ${refs} 笔记录或周期模板使用该分类，无法删除`, true); return; }
     askConfirm('确定删除该分类及其全部子分类吗？', () => {
       state.categories = state.categories.filter(c => c.id !== id);
@@ -1134,7 +1166,8 @@
 
   function onDelSub(subId) {
     const refs = state.transactions.filter(t => t.subcategoryId === subId).length
-      + state.recurrings.filter(r => r.subcategoryId === subId).length;
+      + state.recurrings.filter(r => r.subcategoryId === subId).length
+      + state.trash.filter(t => t.subcategoryId === subId).length;
     if (refs > 0) { toast(`有 ${refs} 笔记录或周期模板使用该子分类，无法删除`, true); return; }
     state.catDraft.subs = state.catDraft.subs.filter(s => s.id !== subId);
     renderCatSubs();
@@ -1187,7 +1220,8 @@
   function onDeleteAcc(id) {
     if (!id) return;
     const refs = state.transactions.filter(t => t.accountId === id || t.toAccountId === id).length
-      + state.recurrings.filter(r => r.accountId === id || r.toAccountId === id).length;
+      + state.recurrings.filter(r => r.accountId === id || r.toAccountId === id).length
+      + state.trash.filter(t => t.accountId === id || t.toAccountId === id).length;
     if (refs > 0) { toast(`有 ${refs} 笔记录或周期模板使用该账户，无法删除`, true); return; }
     askConfirm('确定删除该账户吗？', () => {
       state.accounts = state.accounts.filter(a => a.id !== id);
@@ -1387,6 +1421,7 @@
         state.budgets = prev.budgets;
         state.settings = prev.settings;
         state.recurrings = prev.recurrings;
+        state.trash = prev.trash;
         saveAll();
         toast('存储空间不足，导入已撤销；请清理空间或先导出旧数据后重试', true);
         render();
@@ -1439,7 +1474,10 @@
 
   function handleImportCsvText(text) {
     const kind = Core.detectBillKind(text);
-    if (kind) { handleImportBill(text, kind); return; }
+    if (kind) {
+      const bill = Core.parseBillCsv(text, kind, state.accounts, { fallbackAccountId: (state.accounts[0] || {}).id || null, categories: state.categories });
+      if (bill.headerFound) { handleImportBill(text, kind, bill); return; }
+    }
     const parsed = Core.parseCSV(text, state.categories, state.accounts);
     if (!parsed.transactions.length) {
       toast('没有可导入的行：' + parsed.errors.slice(0, 2).map(e => e.message).join('；'), true);
@@ -1463,10 +1501,10 @@
     });
   }
 
-  function handleImportBill(text, kind) {
+  function handleImportBill(text, kind, preParsed) {
     const kindName = kind === 'alipay' ? '支付宝' : '微信';
     const fallbackId = (state.accounts[0] || {}).id || null;
-    const parsed = Core.parseBillCsv(text, kind, state.accounts, { fallbackAccountId: fallbackId });
+    const parsed = preParsed || Core.parseBillCsv(text, kind, state.accounts, { fallbackAccountId: fallbackId, categories: state.categories });
     if (!parsed.transactions.length) {
       toast('没有可导入的行：' + parsed.errors.slice(0, 2).map(e => e.message).join('；'), true);
       return;
@@ -1474,12 +1512,16 @@
     const income = parsed.transactions.filter(t => t.type === 'income').length;
     const expense = parsed.transactions.length - income;
     const skipNote = parsed.errors.length ? '，' + parsed.errors.length + ' 行跳过' : '';
+    const keyOf = t => [t.date, t.amount, t.type, t.categoryId, t.accountId, t.note].join('|');
+    const existing = new Set(state.transactions.map(keyOf));
+    const dupCount = parsed.transactions.filter(t => existing.has(keyOf(t))).length;
+    const dupNote = dupCount > 0 ? '，其中 ' + dupCount + ' 笔可能与现有记录重复' : '';
     const fallbackName = (state.accounts[0] || {}).name || '默认账户';
-    askConfirm(`识别为${kindName}账单：收入 ${income} 笔、支出 ${expense} 笔${skipNote}。无法识别支付方式的记录将记入「${fallbackName}」，导入后可在明细中调整。确定追加导入？`, () => {
+    askConfirm(`识别为${kindName}账单：收入 ${income} 笔、支出 ${expense} 笔${dupNote}${skipNote}。无法识别支付方式的记录将记入「${fallbackName}」，导入后可在明细中调整。确定追加导入？`, () => {
       state.transactions.push(...parsed.transactions);
       saveKey('transactions');
       render();
-      toast(`已导入 ${parsed.transactions.length} 笔${kindName}账单`);
+      toast(`已导入 ${parsed.transactions.length} 笔${kindName}账单${parsed.errors.length ? '，跳过 ' + parsed.errors.length + ' 行' : ''}`);
     });
   }
 
@@ -1494,7 +1536,8 @@
         state.budgets = {};
         state.settings = { currency: '¥' };
         state.recurrings = [];
-        state.filter = { type: '', categoryId: '', accountId: '', tag: '', day: '', keyword: '' };
+        state.trash = [];
+        state.filter = { type: '', categoryId: '', accountId: '', tag: '', day: '', minYuan: '', maxYuan: '', keyword: '' };
         state.drillCatId = null;
         saveAll();
         applyTheme();
@@ -1572,6 +1615,8 @@
         }
         case 'confirm-cancel': pendingConfirm = null; hide('#confirm-modal'); break;
         case 'drill-back': state.drillCatId = null; renderStats(); break;
+        case 'stats-year-prev': state.statsYear = (state.statsYear || Number(state.monthKey.slice(0, 4))) - 1; renderStats(); break;
+        case 'stats-year-next': state.statsYear = (state.statsYear || Number(state.monthKey.slice(0, 4))) + 1; renderStats(); break;
         case 'toast-action': {
           const a = toastAction;
           toastAction = null;

@@ -1,3 +1,5 @@
+import js from '@eslint/js';
+
 const browserGlobals = {
   window: 'readonly', document: 'readonly', location: 'readonly', navigator: 'readonly',
   localStorage: 'readonly', performance: 'readonly', Core: 'readonly', desktopBridge: 'readonly',
@@ -16,6 +18,7 @@ const swGlobals = {
 };
 
 export default [
+  js.configs.recommended,
   { ignores: ['node_modules/**', 'release/**', 'docs/**', 'tests/shots/**', '.optimize-backup/**', '.zcode/**', '.mimosa/**'] },
   {
     files: ['core.js', 'tests/**/*.js', 'server.js', 'tools/**/*.js'],
