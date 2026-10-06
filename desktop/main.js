@@ -5,7 +5,7 @@ const fs = require('fs');
 
 const isSelfcheck = process.argv.includes('--selfcheck');
 let mainWindow = null;
-let windowState = { width: 1280, height: 800, maximized: false };
+const windowState = { width: 1280, height: 800, maximized: false };
 
 function stateFile() {
   return path.join(app.getPath('userData'), 'window-state.json');

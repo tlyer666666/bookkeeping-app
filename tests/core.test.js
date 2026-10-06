@@ -664,6 +664,87 @@ test('dailyInOut：每日收入/支出聚合，转账不计，跨月过滤', () 
   assert.ok(feb.every(d => d.incomeFen === 0 && d.expenseFen === 0));
 });
 
+test('filterTransactions：金额区间与日期筛选', () => {
+  const cats1 = core.DEFAULT_CATEGORIES;
+  const list = [
+    tx({ id: 'a', amount: 100, date: '2026-10-02' }),
+    tx({ id: 'b', amount: 5000, date: '2026-10-02' }),
+    tx({ id: 'c', amount: 100000, date: '2026-10-02' }),
+    tx({ id: 'd', amount: 100, date: '2026-10-15' }),
+  ];
+  const r = core.filterTransactions(list, { minAmountFen: 100, maxAmountFen: 5000 }, cats1);
+  assert.deepStrictEqual(r.map(t => t.id), ['d', 'a', 'b'], '闭区间，日期倒序（同日按创建顺序）');
+  assert.deepStrictEqual(core.filterTransactions(list, { maxAmountFen: 4999 }, cats1).map(t => t.id), ['d', 'a'], '超上限排除');
+  assert.deepStrictEqual(core.filterTransactions(list, { day: 15 }, cats1).map(t => t.id), ['d']);
+});
+
+test('parseBillCsv：支付宝账单解析（元数据头、不计收支、退款跳过）', () => {
+  const accs = core.DEFAULT_ACCOUNTS;
+  const text = [
+    '支付宝交易记录明细查询,,,',
+    '账号:[xxx@xxx],,,',
+    '----------------------------------------,,,',
+    '交易创建时间,交易对方,商品名称,金额（元）,收/支,交易状态',
+    '2026-10-01 12:00:00,某某超市,日用品,25.50,支出,交易成功',
+    '2026-10-02 09:00:00,某某公司,工资,10000.00,收入,交易成功',
+    '2026-10-03 10:00:00,某某店,咖啡,15.00,不计收支,交易成功',
+    '2026-10-04 11:00:00,某某店,退款单,20.00,支出,退款成功',
+  ].join('\r\n');
+  const r = core.parseBillCsv(text, 'alipay', accs, { fallbackAccountId: 'acc_cash' });
+  assert.deepStrictEqual(r.errors, []);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.transactions.length, 2);
+  assert.strictEqual(r.transactions[0].amount, 2550);
+  assert.strictEqual(r.transactions[0].categoryId, 'e10');
+  assert.strictEqual(r.transactions[0].accountId, 'acc_cash', '无支付方式列时落到 fallback');
+  assert.strictEqual(r.transactions[1].type, 'income');
+  assert.strictEqual(r.transactions[1].categoryId, 'i5');
+});
+
+test('parseBillCsv：微信账单解析（¥ 前缀、零钱映射、/ 跳过）', () => {
+  const accs = core.DEFAULT_ACCOUNTS;
+  const text = [
+    '微信支付账单明细,,,,,',
+    '导出时间:[2026-11-01 10:00:00],,,,,',
+    '---------------,,,,,',
+    '交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注',
+    '2026-10-01 20:00:00,商户消费,某某便利店,日用,支出,¥12.50,零钱,支付成功,10001,20001,/',
+    '2026-10-02 10:00:00,微信红包,发给某某,红包,支出,¥66.00,零钱,已转账,10002,20002,/',
+    '2026-10-03 12:00:00,收到的红包,某某,红包,收入,¥88.00,零钱,已存入零钱,10003,20003,/',
+    '2026-10-04 13:00:00,转账-退款,某某,转账退款,/,¥50.00,零钱,退款到账,10004,20004,/',
+  ].join('\r\n');
+  const r = core.parseBillCsv(text, 'wechat', accs, { fallbackAccountId: 'acc_cash' });
+  assert.strictEqual(r.transactions.length, 3);
+  const first = r.transactions[0];
+  assert.strictEqual(first.amount, 1250);
+  assert.strictEqual(first.accountId, 'acc_wechat', '支付方式零钱映射到微信零钱账户');
+  assert.strictEqual(first.categoryId, 'e10');
+  assert.strictEqual(r.transactions[2].type, 'income');
+  assert.strictEqual(r.transactions[2].categoryId, 'i5');
+  assert.strictEqual(r.errors.length, 0);
+});
+
+test('parseBillCsv：未知支付方式落 fallback，非法行报错', () => {
+  const accs = [{ id: 'acc_bank', name: '招行储蓄卡', icon: '🏦', initialBalance: 0 }];
+  const text = [
+    '微信支付账单明细,,,,,',
+    '交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注',
+    '2026-10-01 20:00:00,商户消费,便利店,日用,支出,¥12.00,招商银行(1234),支付成功,1,2,/',
+    '2026-10-02 20:00:00,商户消费,便利店,日用,支出,abc,零钱,支付成功,3,4,/',
+  ].join('\r\n');
+  const r = core.parseBillCsv(text, 'wechat', accs, { fallbackAccountId: 'acc_bank' });
+  assert.strictEqual(r.transactions.length, 1);
+  assert.strictEqual(r.transactions[0].accountId, 'acc_bank', '含「银行」的支付方式映射到银行卡');
+  assert.strictEqual(r.errors.length, 1);
+  assert.strictEqual(r.errors[0].row, 4);
+});
+
+test('detectBillKind：识别支付宝/微信/标准格式', () => {
+  assert.strictEqual(core.detectBillKind('微信支付账单明细\n交易时间,交易类型'), 'wechat');
+  assert.strictEqual(core.detectBillKind('支付宝交易记录明细查询\n交易创建时间'), 'alipay');
+  assert.strictEqual(core.detectBillKind('类型,日期,金额（元）'), null);
+});
+
 /* ---------- run ---------- */
 
 (async () => {

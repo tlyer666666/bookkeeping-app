@@ -3,7 +3,6 @@ const path = require('path');
 const { packager } = require('@electron/packager');
 
 (async () => {
-  const out = path.resolve('release');
   const paths = await packager({
     dir: '.',
     out: 'release',

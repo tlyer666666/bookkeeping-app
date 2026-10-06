@@ -290,10 +290,6 @@
     const a = state.accounts.find(x => x.id === id);
     return a ? a.name : '未知账户';
   }
-  function categoryName(id) {
-    const c = Core.findCategory(state.categories, id);
-    return c ? c.name : '未知分类';
-  }
 
   function hi(text, kw) {
     const e = esc(text);
@@ -348,15 +344,22 @@
     if (state.filter.type) f.type = state.filter.type;
     if (state.filter.categoryId) f.categoryId = state.filter.categoryId;
     if (state.filter.accountId) f.accountId = state.filter.accountId;
+    if (state.filter.day) f.day = Number(state.filter.day);
     if (state.filter.tag) f.tag = state.filter.tag;
     if (state.filter.keyword) f.keyword = state.filter.keyword;
+    if (state.filter.minYuan) {
+      const v = parseFenAllowZero(state.filter.minYuan);
+      if (v != null) f.minAmountFen = v;
+    }
+    if (state.filter.maxYuan) {
+      const v = parseFenAllowZero(state.filter.maxYuan);
+      if (v != null) f.maxAmountFen = v;
+    }
     return f;
   }
 
   function txListHtml() {
-    const base = Object.assign({ monthKey: state.monthKey }, activeFilter());
-    if (state.filter.day) base.day = Number(state.filter.day);
-    const filtered = Core.filterTransactions(state.transactions, base, state.categories);
+    const filtered = Core.filterTransactions(state.transactions, Object.assign({ monthKey: state.monthKey }, activeFilter()), state.categories);
     if (!filtered.length) {
       const hasAnyInMonth = state.transactions.some(t => Core.monthKeyOf(t.date) === state.monthKey);
       return '<div class="empty-tip">' + (hasAnyInMonth
@@ -431,11 +434,13 @@
             <option value="">全部账户</option>
             ${state.accounts.map(a => `<option value="${esc(a.id)}"${f.accountId === a.id ? ' selected' : ''}>${esc(a.icon + ' ' + a.name)}</option>`).join('')}
           </select>
-          <select data-filter="tag">
-            <option value="">全部标签</option>
-            ${allTags().map(tag => `<option value="${esc(tag)}"${f.tag === tag ? ' selected' : ''}>#${esc(tag)}</option>`).join('')}
-          </select>
-          <input data-filter="keyword" type="text" placeholder="搜索备注 / 分类" value="${esc(f.keyword)}">
+        <select data-filter="tag">
+          <option value="">全部标签</option>
+          ${allTags().map(tag => `<option value="${esc(tag)}"${f.tag === tag ? ' selected' : ''}>#${esc(tag)}</option>`).join('')}
+        </select>
+        <input data-filter="minYuan" type="text" inputmode="decimal" placeholder="金额≥" value="${esc(f.minYuan || '')}">
+        <input data-filter="maxYuan" type="text" inputmode="decimal" placeholder="金额≤" value="${esc(f.maxYuan || '')}">
+        <input data-filter="keyword" type="text" placeholder="搜索备注 / 分类" value="${esc(f.keyword)}">
         </div>
       </div>
       ${state.detailView === 'calendar' ? calendarHtml() : '<div id="tx-list"></div>'}`;
@@ -567,13 +572,9 @@
   }
 
   function renderTxTypeSeg() { renderSeg(FORMS.tx, state.formType); }
-  function renderTxAccountSelects() { renderAccountSelects(FORMS.tx); }
-  function renderTxCatOptions() { renderCatOptions(FORMS.tx, state.formType, true); }
   function renderTxSubOptions() { renderSubOptions(FORMS.tx); }
   function onFormTypeChanged() { applyFormType(FORMS.tx, state.formType); }
   function renderRecTypeSeg() { renderSeg(FORMS.rec, state.recFormType); }
-  function renderRecAccountSelects() { renderAccountSelects(FORMS.rec); }
-  function renderRecCatOptions() { renderCatOptions(FORMS.rec, state.recFormType, true); }
   function renderRecSubOptions() { renderSubOptions(FORMS.rec); }
   function onRecTypeChanged() { applyFormType(FORMS.rec, state.recFormType); }
 
@@ -1198,43 +1199,6 @@
 
   /* ================= 周期记账与 CSV ================= */
 
-  function renderRecTypeSeg() {
-    document.querySelectorAll('#rec-type button').forEach(b =>
-      b.classList.toggle('active', b.dataset.recType === state.recFormType));
-  }
-
-  function renderRecAccountSelects() {
-    $('#rec-account').innerHTML = optionAccounts(null);
-    $('#rec-from').innerHTML = optionAccounts(null);
-    $('#rec-to').innerHTML = optionAccounts(null);
-  }
-
-  function renderRecCatOptions() {
-    const prev = $('#rec-cat').value;
-    const cats = state.categories.filter(c => c.type === state.recFormType);
-    $('#rec-cat').innerHTML = cats.map(c =>
-      `<option value="${esc(c.id)}">${esc(c.icon + ' ' + c.name)}</option>`).join('');
-    if (cats.some(c => c.id === prev)) $('#rec-cat').value = prev;
-  }
-
-  function renderRecSubOptions() {
-    const cat = Core.findCategory(state.categories, $('#rec-cat').value);
-    const cur = $('#rec-sub').value;
-    $('#rec-sub').innerHTML = '<option value="">（只记到大类）</option>' + (cat ? cat.subs.map(s =>
-      `<option value="${esc(s.id)}"${s.id === cur ? ' selected' : ''}>${esc(s.name)}</option>`).join('') : '');
-  }
-
-  function onRecTypeChanged() {
-    const isTransfer = state.recFormType === 'transfer';
-    $('#rec-cat-group').classList.toggle('hidden', isTransfer);
-    $('#rec-account-group').classList.toggle('hidden', isTransfer);
-    $('#rec-transfer-group').classList.toggle('hidden', !isTransfer);
-    if (!isTransfer) {
-      renderRecCatOptions();
-      renderRecSubOptions();
-    }
-  }
-
   function openRecModal(recId) {
     const r = recId ? state.recurrings.find(x => x.id === recId) : null;
     state.recEditorId = recId || null;
@@ -1328,9 +1292,6 @@
 
   function onImportClick(kind) {
     if (desktopBridge) {
-      const filters = kind === 'json'
-        ? [{ name: 'JSON 备份', extensions: ['json'] }]
-        : [{ name: 'CSV 明细', extensions: ['csv'] }];
       desktopBridge.importFile({ kind }).then(r => {
         if (!r || r.canceled) return;
         if (!r.ok) { toast('读取文件失败：' + (r.error || '未知错误'), true); return; }
@@ -1438,6 +1399,8 @@
   }
 
   function handleImportCsvText(text) {
+    const kind = Core.detectBillKind(text);
+    if (kind) { handleImportBill(text, kind); return; }
     const parsed = Core.parseCSV(text, state.categories, state.accounts);
     if (!parsed.transactions.length) {
       toast('没有可导入的行：' + parsed.errors.slice(0, 2).map(e => e.message).join('；'), true);
@@ -1458,6 +1421,26 @@
       saveKey('transactions');
       render();
       toast('已导入 ' + parsed.transactions.length + ' 笔' + (parsed.errors.length ? '，跳过 ' + parsed.errors.length + ' 行' : ''));
+    });
+  }
+
+  function handleImportBill(text, kind) {
+    const kindName = kind === 'alipay' ? '支付宝' : '微信';
+    const fallbackId = (state.accounts[0] || {}).id || null;
+    const parsed = Core.parseBillCsv(text, kind, state.accounts, { fallbackAccountId: fallbackId });
+    if (!parsed.transactions.length) {
+      toast('没有可导入的行：' + parsed.errors.slice(0, 2).map(e => e.message).join('；'), true);
+      return;
+    }
+    const income = parsed.transactions.filter(t => t.type === 'income').length;
+    const expense = parsed.transactions.length - income;
+    const skipNote = parsed.errors.length ? '，' + parsed.errors.length + ' 行跳过' : '';
+    const fallbackName = (state.accounts[0] || {}).name || '默认账户';
+    askConfirm(`识别为${kindName}账单：收入 ${income} 笔、支出 ${expense} 笔${skipNote}。无法识别支付方式的记录将记入「${fallbackName}」，导入后可在明细中调整。确定追加导入？`, () => {
+      state.transactions.push(...parsed.transactions);
+      saveKey('transactions');
+      render();
+      toast(`已导入 ${parsed.transactions.length} 笔${kindName}账单`);
     });
   }
 
@@ -1583,7 +1566,7 @@
         case 'del-corrupt': {
           const key = act.dataset.key;
           askConfirm('确定删除该损坏备份吗？删除后无法找回。', () => {
-            try { state.storage.backend.removeItem(key); } catch (e) { /* 忽略 */ }
+            try { state.storage.backend.removeItem(key); } catch (err) { /* 忽略 */ }
             render();
             toast('已删除损坏备份');
           });

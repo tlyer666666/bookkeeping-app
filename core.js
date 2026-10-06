@@ -344,6 +344,8 @@
       if (f.type && t.type !== f.type) return false;
       if (f.accountId && t.accountId !== f.accountId && t.toAccountId !== f.accountId) return false;
       if (f.day && Number(t.date.slice(8, 10)) !== f.day) return false;
+      if (f.minAmountFen != null && !(typeof t.amount === 'number' && t.amount >= f.minAmountFen)) return false;
+      if (f.maxAmountFen != null && !(typeof t.amount === 'number' && t.amount <= f.maxAmountFen)) return false;
       if (f.tag && !(Array.isArray(t.tags) && t.tags.includes(f.tag))) return false;
       if (f.categoryId) {
         if (t.type === 'transfer' || t.categoryId !== f.categoryId) return false;
@@ -478,6 +480,111 @@
       remainingFen: total - spent, percent: Math.floor(spent * 100 / total),
       level: levelOf(ratio), perCategory,
     };
+  }
+
+  /* ================= 第三方账单导入（支付宝/微信） ================= */
+
+  function detectBillKind(text) {
+    const s = String(text || '');
+    if (s.indexOf('微信支付账单明细') >= 0) return 'wechat';
+    if (s.indexOf('支付宝交易记录明细') >= 0 || s.indexOf('交易创建时间') >= 0) return 'alipay';
+    return null;
+  }
+
+  const BILL_KINDS = {
+    alipay: {
+      name: '支付宝',
+      requiredCols: ['交易创建时间', '收/支', '金额（元）'],
+      timeCol: '交易创建时间',
+      amountCol: '金额（元）',
+      payCol: null,
+      noteCols: ['类型', '交易对方', '商品名称'],
+      statusCol: '交易状态',
+      statusOk: st => st === '交易成功',
+    },
+    wechat: {
+      name: '微信',
+      requiredCols: ['交易时间', '收/支', '金额(元)'],
+      timeCol: '交易时间',
+      amountCol: '金额(元)',
+      payCol: '支付方式',
+      noteCols: ['交易类型', '交易对方', '商品', '备注'],
+      statusCol: '当前状态',
+      statusOk: st => st.indexOf('退款') < 0 && st.indexOf('撤销') < 0 && st.indexOf('冲正') < 0
+        && (st.indexOf('成功') >= 0 || st.indexOf('已转账') >= 0 || st.indexOf('已存入') >= 0 || st.indexOf('已收钱') >= 0),
+    },
+  };
+
+  function mapBillAccount(payName, accounts, fallbackAccountId) {
+    const name = String(payName || '');
+    const named = accounts.find(a => a.name && a.name.length >= 2 && (name.indexOf(a.name) >= 0 || a.name.indexOf(name) >= 0 && name.length >= 2));
+    if (named) return named;
+    const keywords = ['微信', '零钱', '支付宝', '银行卡', '银行', '现金'];
+    for (const kw of keywords) {
+      if (name.indexOf(kw) >= 0) {
+        const acc = accounts.find(a => (a.name || '').indexOf(kw) >= 0);
+        if (acc) return acc;
+      }
+    }
+    return accounts.find(a => a.id === fallbackAccountId) || accounts[0] || null;
+  }
+
+  function parseBillCsv(text, kind, accounts, options) {
+    options = options || {};
+    const fallbackAccountId = options.fallbackAccountId || null;
+    const bill = BILL_KINDS[kind];
+    const errors = [];
+    if (!bill) return { ok: false, errors: [{ row: 0, message: '不支持的账单类型：' + kind }], transactions: [] };
+    const rows = parseCsvRows(String(text || '').replace(/^\uFEFF/, ''));
+    let headerIdx = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const h = rows[i].map(x => x.trim());
+      if (bill.requiredCols.every(w => h.indexOf(w) >= 0)) { headerIdx = i; break; }
+    }
+    if (headerIdx === -1) {
+      return { ok: false, errors: [{ row: 0, message: '未找到' + bill.name + '账单列头，请确认导出的原始账单文件' }], transactions: [] };
+    }
+    const cols = rows[headerIdx].map(x => x.trim());
+    const colIdx = name => cols.indexOf(name);
+    const out = [];
+    for (let r = headerIdx + 1; r < rows.length; r++) {
+      const f = rows[r];
+      const rowNo = r + 1;
+      if (f.length === 1 && !f[0].trim()) continue;
+      const get = name => { const i2 = colIdx(name); return i2 >= 0 ? (f[i2] || '').trim() : ''; };
+      const inOut = get('收/支');
+      if (inOut === '/' || inOut === '不计收支' || inOut === '' || inOut === '收/支') continue;
+      const type = inOut === '收入' ? 'income' : inOut === '支出' ? 'expense' : null;
+      if (!type) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行收/支无法识别：' + inOut }); continue; }
+      const timeRaw = get(bill.timeCol);
+      const dm = timeRaw.match(/(\d{4}-\d{2}-\d{2})/);
+      if (!dm) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行日期无法识别：' + timeRaw }); continue; }
+      const date = dm[1];
+      if (!isValidDate(date)) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行日期不合法：' + timeRaw }); continue; }
+      const amount = parseYuanToFen(String(get(bill.amountCol)).replace(/[¥￥\s,]/g, ''));
+      if (amount == null) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行金额无法识别：' + get(bill.amountCol) }); continue; }
+      const status = get(bill.statusCol);
+      if (status && !bill.statusOk(status)) continue;
+      const payName = bill.payCol ? get(bill.payCol) : '';
+      const acc = mapBillAccount(payName, accounts, fallbackAccountId);
+      if (!acc) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行无法确定账户：' + payName }); continue; }
+      const note = bill.noteCols.map(nc => get(nc)).filter(Boolean).join(' - ').slice(0, 200);
+      const t = {
+        id: genId('tx'),
+        type, amount, date,
+        categoryId: type === 'income' ? 'i5' : 'e10',
+        subcategoryId: null,
+        accountId: acc.id,
+        toAccountId: null,
+        note,
+        tags: [bill.name],
+        createdAt: new Date().toISOString(),
+      };
+      const v = validateTransaction(t, DEFAULT_CATEGORIES, accounts);
+      if (!v.ok) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行：' + v.errors.join('；') }); continue; }
+      out.push(t);
+    }
+    return { ok: errors.length === 0, errors, transactions: out };
   }
 
   /* ================= 导入校验 ================= */
@@ -826,6 +933,7 @@ function csvCell(v) {
     categoryTotals, dailyTotals, monthlyTrend, budgetStatus, levelOf,
     withCategoryDelta, rankSubs, dailyInOut,
     toCSV, parseCSV, CSV_HEADER,
+    detectBillKind, parseBillCsv, BILL_KINDS,
     generateDueRecurrings, RECURRING_FREQUENCIES,
     getCategories, findCategory, findSub, TX_TYPES,
   };
