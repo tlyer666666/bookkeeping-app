@@ -1094,6 +1094,13 @@
     });
   }
 
+  const EMOJI_CHOICES = ['🍜', '☕', '🛒', '🚌', '🚗', '🏠', '🎮', '🏥', '📖', '🎓', '🎁', '💳', '📈', '💼', '📦', '🧧', '🐱', '🐶', '👕', '📱', '💊', '🎬', '✈️', '🏖️'];
+
+  function renderEmojiGrid() {
+    $('#emoji-grid').innerHTML = EMOJI_CHOICES.map(e =>
+      `<button type="button" class="emoji-cell${$('#cat-icon').value === e ? ' active' : ''}" data-action="pick-icon" data-emoji="${e}">${e}</button>`).join('');
+  }
+
   function openCatModal(catId) {
     const cat = catId ? Core.findCategory(state.categories, catId) : null;
     state.catEditorId = catId || null;
@@ -1103,6 +1110,7 @@
     $('#cat-name').value = cat ? cat.name : '';
     $('#cat-new-sub').value = '';
     renderCatSubs();
+    renderEmojiGrid();
     modalOpenedAt = Date.now();
     show('#cat-modal');
   }
@@ -1577,6 +1585,12 @@
         case 'edit-rec': openRecModal(act.dataset.id); break;
         case 'del-rec': state.recEditorId = act.dataset.id; onRecDelete(); break;
         case 'delete-rec': onRecDelete(); break;
+        case 'pick-icon': {
+          $('#cat-icon').value = act.dataset.emoji;
+          document.querySelectorAll('#emoji-grid .emoji-cell').forEach(b =>
+            b.classList.toggle('active', b.dataset.emoji === act.dataset.emoji));
+          break;
+        }
         case 'restore-trash': {
           const i = state.trash.findIndex(x => x.id === act.dataset.id);
           if (i >= 0) {
