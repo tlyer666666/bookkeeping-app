@@ -111,6 +111,8 @@
     accEditorId: null,
     recEditorId: null,
     recFormType: 'expense',
+    trash: [],
+    statsYear: null,
   };
 
   let pendingConfirm = null;
@@ -133,7 +135,7 @@
   }
   function saveAll() {
     let ok = true;
-    ['transactions', 'accounts', 'categories', 'budgets', 'settings', 'recurrings'].forEach(name => {
+    ['transactions', 'accounts', 'categories', 'budgets', 'settings', 'recurrings', 'trash'].forEach(name => {
       if (!saveKey(name)) ok = false;
     });
     return ok;
@@ -171,6 +173,7 @@
     if (!Array.isArray(state.accounts)) { state.accounts = deepCopy(Core.DEFAULT_ACCOUNTS); }
     if (!Array.isArray(state.categories)) { state.categories = deepCopy(Core.DEFAULT_CATEGORIES); }
     if (!Array.isArray(state.recurrings)) state.recurrings = [];
+    if (!Array.isArray(state.trash)) state.trash = [];
     if (!state.budgets || typeof state.budgets !== 'object' || Array.isArray(state.budgets)) state.budgets = {};
     if (!state.settings || typeof state.settings !== 'object' || Array.isArray(state.settings)) state.settings = { currency: '¥' };
 
@@ -630,15 +633,21 @@
     const id = state.editingId;
     const idx = state.transactions.findIndex(x => x.id === id);
     if (idx === -1) { toast('记录不存在或已被删除', true); return; }
-    askConfirm('确定删除这笔记录吗？', () => {
+    askConfirm('确定删除这笔记录吗？可在管理页回收站恢复。', () => {
       const cur = state.transactions.findIndex(x => x.id === id);
       if (cur === -1) { hideModal('#tx-modal'); toast('记录不存在或已被删除', true); return; }
       const removed = state.transactions.splice(cur, 1)[0];
+      state.trash.unshift(Object.assign({ deletedAt: new Date().toISOString() }, removed));
+      if (state.trash.length > 200) state.trash.length = 200;
       saveKey('transactions');
+      saveKey('trash');
       hideModal('#tx-modal');
       render();
-      toast('已删除', false, { label: '撤销', cb() {
+      toast('已移入回收站', false, { label: '撤销', cb() {
+        const i = state.trash.findIndex(x => x.id === removed.id);
+        if (i >= 0) state.trash.splice(i, 1);
         state.transactions.push(removed);
+        saveKey('trash');
         saveKey('transactions');
         render();
         toast('已撤销删除');
@@ -988,6 +997,21 @@
         if (raw != null) corruptKeys.push({ key: k + '.corrupt-backup', size: raw.length });
       } catch (e) { /* 后端不可访问时忽略 */ }
     }
+    const trashRows = state.trash.map(t => {
+      const cat = Core.findCategory(state.categories, t.categoryId);
+      const sign = t.type === 'income' ? '+' : t.type === 'transfer' ? '' : '-';
+      const desc = t.type === 'transfer'
+        ? accountName(t.accountId) + ' → ' + accountName(t.toAccountId)
+        : (cat ? cat.name : '未知分类');
+      return `<div class="manage-row">
+        <span class="m-icon">🗑️</span>
+        <span class="m-name">${esc(desc)}<small>${esc(t.date)} · ${sign}${yuan(t.amount)}${t.note ? ' · ' + esc(t.note) : ''}</small></span>
+        <span class="m-actions">
+          <button class="btn btn-small" data-action="restore-trash" data-id="${esc(t.id)}">恢复</button>
+          <button class="btn btn-small" data-action="purge-trash" data-id="${esc(t.id)}">彻底删除</button>
+        </span>
+      </div>`;
+    }).join('');
     const corruptBlock = corruptKeys.length
       ? `<h3>损坏数据备份</h3><p class="hint">检测到启动时被替换的损坏数据原文，可导出后尝试人工恢复：</p>` +
         corruptKeys.map(c => `<div class="manage-row">
@@ -1006,6 +1030,11 @@
         <div class="add-form">
           <button class="btn-primary btn-small" data-action="add-rec">＋ 新增周期记账</button>
         </div>
+      </div>
+      <div class="card manage-section">
+        <h3>回收站（${state.trash.length}）</h3>
+        ${trashRows || '<p class="hint">删除的记录会在这里保留（最多 200 条），可随时恢复。</p>'}
+        ${state.trash.length ? '<div class="add-form"><button class="btn-danger btn-small" data-action="clear-trash">清空回收站</button></div>' : ''}
       </div>
       <div class="card manage-section">
         <h3>账户管理（${state.accounts.length}）</h3>
@@ -1340,7 +1369,8 @@
       state.budgets = v.data.budgets;
       state.settings = v.data.settings && typeof v.data.settings === 'object' ? v.data.settings : { currency: '¥' };
       state.recurrings = Array.isArray(v.data.recurrings) ? v.data.recurrings : [];
-      state.filter = { type: '', categoryId: '', accountId: '', tag: '', keyword: '' };
+      state.trash = Array.isArray(v.data.trash) ? v.data.trash : [];
+      state.filter = { type: '', categoryId: '', accountId: '', tag: '', day: '', minYuan: '', maxYuan: '', keyword: '' };
       state.drillCatId = null;
       if (!saveAll()) {
         state.transactions = prev.transactions;
@@ -1373,6 +1403,7 @@
         budgets: state.budgets,
         settings: state.settings,
         recurrings: state.recurrings,
+        trash: state.trash,
       },
     };
     const text = JSON.stringify(payload, null, 2);
@@ -1546,6 +1577,38 @@
         case 'edit-rec': openRecModal(act.dataset.id); break;
         case 'del-rec': state.recEditorId = act.dataset.id; onRecDelete(); break;
         case 'delete-rec': onRecDelete(); break;
+        case 'restore-trash': {
+          const i = state.trash.findIndex(x => x.id === act.dataset.id);
+          if (i >= 0) {
+            const item = state.trash.splice(i, 1)[0];
+            delete item.deletedAt;
+            state.transactions.push(item);
+            saveKey('trash');
+            saveKey('transactions');
+            render();
+            toast('已恢复到明细');
+          }
+          break;
+        }
+        case 'purge-trash': {
+          const tid = act.dataset.id;
+          askConfirm('彻底删除后无法恢复，确定吗？', () => {
+            state.trash = state.trash.filter(x => x.id !== tid);
+            saveKey('trash');
+            render();
+            toast('已彻底删除');
+          });
+          break;
+        }
+        case 'clear-trash':
+          if (!state.trash.length) { toast('回收站是空的'); break; }
+          askConfirm('清空回收站后所有已删除记录将彻底消失，确定吗？', () => {
+            state.trash = [];
+            saveKey('trash');
+            render();
+            toast('回收站已清空');
+          });
+          break;
         case 'export-csv': onExportCsv(); break;
         case 'import-csv-click': onImportClick('csv'); break;
         case 'reload-app': location.reload(); break;

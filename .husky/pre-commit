@@ -1,0 +1,4 @@
+npx eslint .
+node --check core.js
+node --check app.js
+node tests/core.test.js

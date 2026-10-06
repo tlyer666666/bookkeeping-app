@@ -250,6 +250,7 @@
       budgets: prefix + 'budgets',
       settings: prefix + 'settings',
       recurrings: prefix + 'recurrings',
+      trash: prefix + 'trash',
     };
   }
   const KEYS = makeKeys('bk.');
@@ -449,6 +450,28 @@
       out.push({ monthKey: mk, incomeFen: a.incomeFen, expenseFen: a.expenseFen });
     }
     return out;
+  }
+
+  function yearStats(list, year) {
+    const y = String(year);
+    let incomeFen = 0, expenseFen = 0;
+    const monthly = Array.from({ length: 12 }, (_, i) => ({ monthKey: y + '-' + pad2(i + 1), incomeFen: 0, expenseFen: 0 }));
+    const catAcc = new Map();
+    for (const t of list) {
+      if (monthKeyOf(t.date).slice(0, 4) !== y) continue;
+      const mi = Number(t.date.slice(5, 7)) - 1;
+      if (t.type === 'income') {
+        incomeFen += t.amount;
+        monthly[mi].incomeFen += t.amount;
+      } else if (t.type === 'expense') {
+        expenseFen += t.amount;
+        monthly[mi].expenseFen += t.amount;
+        if (t.categoryId) catAcc.set(t.categoryId, (catAcc.get(t.categoryId) || 0) + t.amount);
+      }
+    }
+    const topExpense = Array.from(catAcc, ([categoryId, amountFen]) => ({ categoryId, amountFen }))
+      .sort((a, b) => b.amountFen - a.amountFen);
+    return { year: y, incomeFen, expenseFen, balanceFen: incomeFen - expenseFen, monthly, topExpense };
   }
 
   function levelOf(ratio) {
@@ -679,6 +702,18 @@
               ? rec.categoryId == null && !!safeId(rec.toAccountId) && accIds.has(rec.toAccountId)
               : !!safeId(rec.categoryId) && catTypeMap.get(rec.categoryId) === rec.type && rec.toAccountId == null);
           if (!base || !shape) { errors.push('周期模板数据不合法：' + (rec && rec.id)); break; }
+        }
+      }
+    }
+    if (!errors.length && 'trash' in d) {
+      if (!Array.isArray(d.trash)) {
+        errors.push('回收站数据不合法');
+      } else {
+        for (const t of d.trash) {
+          if (!t || typeof t !== 'object' || !t.id || ids.has(t.id) || !safeId(t.id)) { errors.push('回收站数据不合法：' + (t && t.id)); break; }
+          ids.add(t.id);
+          const v = validateTransaction(t, d.categories, d.accounts);
+          if (!v.ok) { errors.push('回收站 ' + t.id + ' 校验失败：' + v.errors.join('；')); break; }
         }
       }
     }
@@ -931,8 +966,9 @@ function csvCell(v) {
     validateTransaction, validateImport, sanitizeLoadedData,
     accountBalances, filterTransactions, monthSummary,
     categoryTotals, dailyTotals, monthlyTrend, budgetStatus, levelOf,
-    withCategoryDelta, rankSubs, dailyInOut,
+    withCategoryDelta, rankSubs, dailyInOut, yearStats,
     toCSV, parseCSV, CSV_HEADER,
+    detectBillKind, parseBillCsv, BILL_KINDS,
     detectBillKind, parseBillCsv, BILL_KINDS,
     generateDueRecurrings, RECURRING_FREQUENCIES,
     getCategories, findCategory, findSub, TX_TYPES,

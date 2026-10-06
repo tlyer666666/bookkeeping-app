@@ -528,6 +528,28 @@ test('validateTransaction：标签必须为不超过 5 个、单个不超过 16 
   assert.ok(!core.validateTransaction(tx({ categoryId: 'e1', tags: ['1', '2', '3', '4', '5', '6'] }), cats, accs).ok);
 });
 
+test('trash 键：makeKeys 含回收站键，validateImport 容忍可选 trash', () => {
+  assert.strictEqual(core.KEYS.trash, 'bk.trash');
+  const base = () => ({
+    version: 1, exportedAt: 'x',
+    data: {
+      transactions: [],
+      accounts: [{ id: 'acc_cash', name: '现金', icon: '💰', initialBalance: 0 }],
+      categories: [{ id: 'e1', type: 'expense', name: '餐饮', icon: '🍜', subs: [] }],
+      budgets: {}, settings: {},
+    },
+  });
+  assert.strictEqual(core.validateImport(base()).ok, true, '无 trash 键兼容');
+  const withTrash = base();
+  withTrash.data.trash = [tx({ id: 't9', categoryId: 'e1' })];
+  const r = core.validateImport(withTrash);
+  assert.strictEqual(r.ok, true, '合法 trash');
+  assert.strictEqual(r.data.trash.length, 1);
+  const badTrash = base();
+  badTrash.data.trash = [{ id: 'x', amount: -1 }];
+  assert.strictEqual(core.validateImport(badTrash).ok, false, '非法 trash 条目拒绝');
+});
+
 test('Storage.clear：连同 corrupt-backup 键一起清理', () => {
   const backend = memBackend();
   const s = new core.Storage(backend);
@@ -662,6 +684,26 @@ test('dailyInOut：每日收入/支出聚合，转账不计，跨月过滤', () 
   const feb = core.dailyInOut(list, '2026-02');
   assert.strictEqual(feb.length, 28);
   assert.ok(feb.every(d => d.incomeFen === 0 && d.expenseFen === 0));
+});
+
+test('yearStats：年度聚合、月度数组与跨年过滤', () => {
+  const list = [
+    tx({ id: 'a', type: 'expense', amount: 1000, date: '2026-01-15', categoryId: 'e1' }),
+    tx({ id: 'b', type: 'expense', amount: 2000, date: '2026-03-20', categoryId: 'e2' }),
+    tx({ id: 'c', type: 'income', amount: 100000, date: '2026-03-25', categoryId: 'i1' }),
+    tx({ id: 'd', type: 'expense', amount: 500, date: '2025-12-31', categoryId: 'e1' }),
+    tx({ id: 'e', type: 'transfer', amount: 800, date: '2026-03-26', accountId: 'acc_cash', toAccountId: 'acc_bank' }),
+  ];
+  const r = core.yearStats(list, 2026);
+  assert.strictEqual(r.incomeFen, 100000);
+  assert.strictEqual(r.expenseFen, 3000);
+  assert.strictEqual(r.monthly.length, 12);
+  assert.deepStrictEqual(r.monthly[0], { monthKey: '2026-01', incomeFen: 0, expenseFen: 1000 });
+  assert.deepStrictEqual(r.monthly[2], { monthKey: '2026-03', incomeFen: 100000, expenseFen: 2000 });
+  assert.strictEqual(r.monthly[11].expenseFen, 0);
+  assert.strictEqual(r.topExpense[0].categoryId, 'e2');
+  assert.strictEqual(r.topExpense[0].amountFen, 2000);
+  assert.strictEqual(core.yearStats(list, 2025).expenseFen, 500);
 });
 
 test('filterTransactions：金额区间与日期筛选', () => {
