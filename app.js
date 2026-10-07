@@ -86,6 +86,40 @@
     return /^0+(\.0+)?$/.test(s) ? 0 : null;
   }
 
+  function updateAmountPreview(inputId, previewId) {
+    const input = $(inputId);
+    const preview = $(previewId);
+    if (!input || !preview) return;
+    const raw = String(input.value || '').trim();
+    if (!/[+\-*/]/.test(raw)) {
+      preview.classList.add('hidden');
+      preview.textContent = '';
+      return;
+    }
+    const fen = parseAmountInput(raw);
+    if (fen != null) {
+      preview.classList.remove('hidden', 'error');
+      preview.textContent = '= ' + curSym() + Core.formatFen(fen);
+    } else {
+      preview.classList.remove('hidden');
+      preview.classList.add('error');
+      preview.textContent = '算式未完成';
+    }
+  }
+
+  function syncDateQuickActive() {
+    const d = $('#tx-date') ? $('#tx-date').value : '';
+    const today = Core.todayStr();
+    const yest = Core.addDays(today, -1);
+    const bYest = Core.addDays(today, -2);
+    const btnToday = document.querySelector('[data-action="date-today"]');
+    const btnYest = document.querySelector('[data-action="date-yesterday"]');
+    const btnBYest = document.querySelector('[data-action="date-before-yesterday"]');
+    if (btnToday) btnToday.classList.toggle('active', d === today);
+    if (btnYest) btnYest.classList.toggle('active', d === yest);
+    if (btnBYest) btnBYest.classList.toggle('active', d === bYest);
+  }
+
   const PALETTE = ['#e05656', '#f0a500', '#4a90d9', '#2f9e63', '#9b6fd6', '#f06292',
     '#26a69a', '#ff8a65', '#7986cb', '#a1887f', '#78909c', '#c0ca33'];
 
@@ -207,12 +241,22 @@
     if (tabMatch && ['detail', 'stats', 'budget', 'manage'].includes(tabMatch[1])) state.tab = tabMatch[1];
     const viewMatch = location.search.match(/[?&]view=(\w+)/);
     if (viewMatch && ['list', 'calendar'].includes(viewMatch[1])) state.detailView = viewMatch[1];
+    const themeMatch = location.search.match(/[?&]theme=(\w+)/);
+    if (themeMatch && ['dark', 'light', 'auto'].includes(themeMatch[1])) {
+      state.settings.theme = themeMatch[1];
+      applyTheme();
+    }
     render();
     if (droppedTotal > 0) toast('已自动忽略 ' + droppedTotal + ' 条损坏数据');
     if (foundCorrupt) toast('检测到数据损坏，原始内容已备份到存储中');
     if (gen.generated > 0) toast('周期记账已自动生成 ' + gen.generated + ' 笔');
     if (gen.errors.length) toast('有 ' + gen.errors.length + ' 个周期模板失效，请到管理页检查', true);
     if (location.search.indexOf('selftest=1') >= 0) runSelftest();
+    if (location.search.indexOf('modal=1') >= 0) {
+      openTxModal(null);
+      $('#tx-amount').value = '15+28';
+      updateAmountPreview('#tx-amount', '#tx-amount-preview');
+    }
   }
 
   /* ================= 通用 UI ================= */
@@ -501,11 +545,31 @@
       if (cells.length === 7) { weeks.push('<div class="cal-row">' + cells.join('') + '</div>'); cells = []; }
     });
     if (cells.length) weeks.push('<div class="cal-row">' + cells.join('') + '</div>');
+    let dayDetailHtml = '';
+    if (state.filter.day) {
+      const d = Number(state.filter.day);
+      const dateStr = state.monthKey + '-' + pad2(d);
+      const dayTx = state.transactions.filter(t => t.date === dateStr);
+      const exp = dayTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+      const inc = dayTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+      const parts = [];
+      if (exp) parts.push('支 ' + Core.formatFen(exp));
+      if (inc) parts.push('收 ' + Core.formatFen(inc));
+      const subHead = parts.length ? ' · ' + parts.join(' / ') : '';
+      dayDetailHtml = `
+      <div class="card cal-day-detail">
+        <div class="day-group-head">
+          <span>${Number(state.monthKey.slice(5))}月${d}日 ${weekdayOf(dateStr)}${subHead}</span>
+          <button class="btn btn-small" data-action="clear-day">取消选中 ✕</button>
+        </div>
+        ${dayTx.length ? dayTx.map(txItemHtml).join('') : '<div class="empty-tip">当日暂无记录</div>'}
+      </div>`;
+    }
     return `<div class="card cal-card">
       <div class="cal-head">${['一', '二', '三', '四', '五', '六', '日'].map(w => '<span>' + w + '</span>').join('')}</div>
       ${weeks.join('')}
-      <p class="hint">点日期查看当日明细</p>
-    </div>`;
+      <p class="hint">点日期即可在下方查看当日明细；再次点击可取消选中。</p>
+    </div>${dayDetailHtml}`;
   }
 
   /* ================= 记账模态 ================= */
@@ -624,9 +688,14 @@
     $('#tx-delete').classList.toggle('hidden', !t);
     $('#tx-dup').classList.toggle('hidden', !t);
     fillFormCommon(FORMS.tx, state.formType, t);
+    updateAmountPreview('#tx-amount', '#tx-amount-preview');
+    syncDateQuickActive();
     modalOpenedAt = Date.now();
     show('#tx-modal');
     $('#tx-amount').focus();
+    if (t) {
+      try { $('#tx-amount').select(); } catch (err) { /* 忽略 */ }
+    }
   }
 
   function onTxSubmit(e) {
@@ -1311,16 +1380,20 @@
     $('#rec-delete').classList.toggle('hidden', !r);
     fillFormCommon(FORMS.rec, state.recFormType, r);
     $('#rec-freq').value = r ? r.frequency : 'monthly';
+    updateAmountPreview('#rec-amount', '#rec-amount-preview');
     modalOpenedAt = Date.now();
     show('#rec-modal');
     $('#rec-amount').focus();
+    if (r) {
+      try { $('#rec-amount').select(); } catch (err) { /* 忽略 */ }
+    }
   }
 
   function onRecSubmit(e) {
     e.preventDefault();
     const editingId = state.recEditorId;
     const type = state.recFormType;
-    const amount = Core.parseYuanToFen($('#rec-amount').value);
+    const amount = parseAmountInput($('#rec-amount').value);
     const rec = Object.assign({
       id: editingId || Core.genId('rec'),
       type,
@@ -1605,8 +1678,18 @@
         case 'prev-month': state.monthKey = Core.shiftMonth(state.monthKey, -1); state.statsYear = null; render(); break;
         case 'next-month': state.monthKey = Core.shiftMonth(state.monthKey, 1); state.statsYear = null; render(); break;
         case 'open-add': openTxModal(null); break;
-        case 'date-today': $('#tx-date').value = Core.todayStr(); break;
-        case 'date-yesterday': $('#tx-date').value = Core.addDays(Core.todayStr(), -1); break;
+        case 'date-today':
+          $('#tx-date').value = Core.todayStr();
+          syncDateQuickActive();
+          break;
+        case 'date-yesterday':
+          $('#tx-date').value = Core.addDays(Core.todayStr(), -1);
+          syncDateQuickActive();
+          break;
+        case 'date-before-yesterday':
+          $('#tx-date').value = Core.addDays(Core.todayStr(), -2);
+          syncDateQuickActive();
+          break;
         case 'duplicate-tx': {
           const src = state.transactions.find(x => x.id === state.editingId);
           if (!src) break;
@@ -1619,11 +1702,12 @@
           toast('已创建副本（日期改为今天），可继续修改');
           break;
         }
-        case 'cal-pick':
-          state.filter.day = act.dataset.day;
-          state.detailView = 'list';
+        case 'cal-pick': {
+          const pickDay = act.dataset.day;
+          state.filter.day = (state.filter.day === pickDay) ? '' : pickDay;
           render();
           break;
+        }
         case 'clear-day': state.filter.day = ''; render(); break;
         case 'data-view': {
           const btn = e.target.closest('[data-view]');
@@ -1743,6 +1827,7 @@
     document.addEventListener('change', e => {
       if (e.target.id === 'tx-cat') { renderTxSubOptions(); return; }
       if (e.target.id === 'rec-cat') { renderRecSubOptions(); return; }
+      if (e.target.id === 'tx-date') { syncDateQuickActive(); return; }
       if (e.target.dataset.filter) {
         if (e.target.dataset.filter === 'keyword') return;
         state.filter[e.target.dataset.filter] = e.target.value;
@@ -1756,6 +1841,18 @@
     });
     let keywordTimer = null;
     document.addEventListener('input', e => {
+      if (e.target.id === 'tx-amount') {
+        updateAmountPreview('#tx-amount', '#tx-amount-preview');
+        return;
+      }
+      if (e.target.id === 'rec-amount') {
+        updateAmountPreview('#rec-amount', '#rec-amount-preview');
+        return;
+      }
+      if (e.target.id === 'tx-date') {
+        syncDateQuickActive();
+        return;
+      }
       if (e.target.dataset && e.target.dataset.filter === 'keyword') {
         state.filter.keyword = e.target.value;
         clearTimeout(keywordTimer);
@@ -1765,6 +1862,20 @@
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape') { closeModal(); return; }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'Enter') {
+        if (e.target && e.target.id === 'new-cat-name-expense') {
+          e.preventDefault(); onAddCat('expense'); return;
+        }
+        if (e.target && e.target.id === 'new-cat-name-income') {
+          e.preventDefault(); onAddCat('income'); return;
+        }
+        if (e.target && (e.target.id === 'new-acc-name' || e.target.id === 'new-acc-initial')) {
+          e.preventDefault(); onAddAcc(); return;
+        }
+        if (e.target && e.target.id === 'cat-new-sub') {
+          e.preventDefault(); onAddSub(); return;
+        }
+      }
       const anyModalOpen = ['#tx-modal', '#cat-modal', '#acc-modal', '#rec-modal', '#confirm-modal']
         .some(s => !$(s).classList.contains('hidden'));
       if (e.key === 'Enter' || e.key === ' ') {

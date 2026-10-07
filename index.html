@@ -20,7 +20,7 @@
 <div id="sync-warn" class="storage-warn hidden">🔄 数据已在其他窗口被修改。<button class="warn-btn" data-action="reload-app">刷新页面</button></div>
 
 <header class="topbar">
-  <div class="brand"><h1>📒 记账管理系统</h1></div>
+  <div class="brand"><h1>📒 记账<span class="brand-sub">管理系统</span></h1></div>
   <div class="month-nav">
     <button class="btn-icon" data-action="prev-month" title="上个月">‹</button>
     <span id="month-label">----</span>
@@ -31,10 +31,10 @@
 </header>
 
 <nav class="tabs">
-  <button class="tab active" data-tab="detail">明细</button>
-  <button class="tab" data-tab="stats">统计</button>
-  <button class="tab" data-tab="budget">预算</button>
-  <button class="tab" data-tab="manage">管理</button>
+  <button class="tab active" data-tab="detail"><span class="tab-icon">📝</span><span class="tab-text">明细</span></button>
+  <button class="tab" data-tab="stats"><span class="tab-icon">📊</span><span class="tab-text">统计</span></button>
+  <button class="tab" data-tab="budget"><span class="tab-icon">🎯</span><span class="tab-text">预算</span></button>
+  <button class="tab" data-tab="manage"><span class="tab-icon">⚙️</span><span class="tab-text">管理</span></button>
 </nav>
 
 <main>
@@ -54,12 +54,18 @@
         <button type="button" data-tx-type="transfer">转账</button>
       </div>
       <div class="field-row">
-        <label class="field">金额（元）<input id="tx-amount" type="text" inputmode="decimal" placeholder="0.00，支持 + - * /" required></label>
+        <label class="field">金额（元）
+          <div class="input-with-preview">
+            <input id="tx-amount" type="text" inputmode="decimal" placeholder="0.00，支持 + - * /" required>
+            <span id="tx-amount-preview" class="expr-preview hidden"></span>
+          </div>
+        </label>
         <label class="field">日期
           <input id="tx-date" type="date" required>
           <div class="date-quick">
             <button type="button" data-action="date-today">今天</button>
             <button type="button" data-action="date-yesterday">昨天</button>
+            <button type="button" data-action="date-before-yesterday">前天</button>
           </div>
         </label>
       </div>
@@ -148,7 +154,12 @@
         <button type="button" data-rec-type="transfer">转账</button>
       </div>
       <div class="field-row">
-        <label class="field">金额（元）<input id="rec-amount" type="text" inputmode="decimal" placeholder="0.00" required></label>
+        <label class="field">金额（元）
+          <div class="input-with-preview">
+            <input id="rec-amount" type="text" inputmode="decimal" placeholder="0.00，支持 + - * /" required>
+            <span id="rec-amount-preview" class="expr-preview hidden"></span>
+          </div>
+        </label>
         <label class="field">频率
           <select id="rec-freq">
             <option value="monthly">每月</option>
