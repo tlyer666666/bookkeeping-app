@@ -252,11 +252,6 @@
     if (gen.generated > 0) toast('周期记账已自动生成 ' + gen.generated + ' 笔');
     if (gen.errors.length) toast('有 ' + gen.errors.length + ' 个周期模板失效，请到管理页检查', true);
     if (location.search.indexOf('selftest=1') >= 0) runSelftest();
-    if (location.search.indexOf('modal=1') >= 0) {
-      openTxModal(null);
-      $('#tx-amount').value = '15+28';
-      updateAmountPreview('#tx-amount', '#tx-amount-preview');
-    }
   }
 
   /* ================= 通用 UI ================= */
@@ -1860,6 +1855,7 @@
       }
     });
     document.addEventListener('keydown', e => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Escape') { closeModal(); return; }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'Enter') {

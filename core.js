@@ -510,27 +510,27 @@
   function detectBillKind(text) {
     const s = String(text || '');
     if (s.indexOf('微信支付账单明细') >= 0) return 'wechat';
-    if (s.indexOf('支付宝交易记录明细') >= 0 || s.indexOf('交易创建时间') >= 0) return 'alipay';
+    if (s.indexOf('支付宝交易记录明细') >= 0 || s.indexOf('支付宝交易明细') >= 0 || s.indexOf('交易创建时间') >= 0) return 'alipay';
     return null;
   }
 
   const BILL_KINDS = {
     alipay: {
       name: '支付宝',
-      requiredCols: ['交易创建时间', '收/支', '金额（元）'],
-      timeCol: '交易创建时间',
-      amountCol: '金额（元）',
-      payCol: null,
-      noteCols: ['类型', '交易对方', '商品名称'],
+      requiredColGroups: [['交易创建时间', '交易时间'], ['收/支'], ['金额（元）', '金额']],
+      timeCols: ['交易创建时间', '交易时间'],
+      amountCols: ['金额（元）', '金额'],
+      payCols: ['收/付款方式'],
+      noteCols: ['类型', '交易对方', '商品名称', '商品说明'],
       statusCol: '交易状态',
-      statusOk: st => st === '交易成功',
+      statusOk: st => st.indexOf('成功') >= 0 && st.indexOf('退款') < 0 && st.indexOf('撤销') < 0,
     },
     wechat: {
       name: '微信',
-      requiredCols: ['交易时间', '收/支', '金额(元)'],
-      timeCol: '交易时间',
-      amountCol: '金额(元)',
-      payCol: '支付方式',
+      requiredColGroups: [['交易时间'], ['收/支'], ['金额(元)']],
+      timeCols: ['交易时间'],
+      amountCols: ['金额(元)'],
+      payCols: ['支付方式'],
       noteCols: ['交易类型', '交易对方', '商品', '备注'],
       statusCol: '当前状态',
       statusOk: st => st.indexOf('退款') < 0 && st.indexOf('撤销') < 0 && st.indexOf('冲正') < 0
@@ -566,13 +566,16 @@
     let headerIdx = -1;
     for (let i = 0; i < rows.length; i++) {
       const h = rows[i].map(x => x.trim());
-      if (bill.requiredCols.every(w => h.indexOf(w) >= 0)) { headerIdx = i; break; }
+      if (bill.requiredColGroups.every(g => g.some(w => h.indexOf(w) >= 0))) { headerIdx = i; break; }
     }
     if (headerIdx === -1) {
       return { ok: false, headerFound: false, errors: [{ row: 0, message: '未找到' + bill.name + '账单列头，请确认导出的原始账单文件' }], transactions: [] };
     }
     const cols = rows[headerIdx].map(x => x.trim());
     const colIdx = name => cols.indexOf(name);
+    const firstCol = names => names.find(n => colIdx(n) >= 0) || names[0];
+    const timeColName = firstCol(bill.timeCols);
+    const amountColName = firstCol(bill.amountCols);
     const out = [];
     for (let r = headerIdx + 1; r < rows.length; r++) {
       const f = rows[r];
@@ -583,16 +586,16 @@
       if (inOut === '/' || inOut === '不计收支' || inOut === '' || inOut === '收/支') continue;
       const type = inOut === '收入' ? 'income' : inOut === '支出' ? 'expense' : null;
       if (!type) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行收/支无法识别：' + inOut }); continue; }
-      const timeRaw = get(bill.timeCol);
+      const timeRaw = get(timeColName);
       const dm = timeRaw.match(/(\d{4}-\d{2}-\d{2})/);
       if (!dm) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行日期无法识别：' + timeRaw }); continue; }
       const date = dm[1];
       if (!isValidDate(date)) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行日期不合法：' + timeRaw }); continue; }
-      const amount = parseYuanToFen(String(get(bill.amountCol)).replace(/[¥￥\s,]/g, ''));
-      if (amount == null) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行金额无法识别：' + get(bill.amountCol) }); continue; }
+      const amount = parseYuanToFen(String(get(amountColName)).replace(/[¥￥\s,]/g, ''));
+      if (amount == null) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行金额无法识别：' + get(amountColName) }); continue; }
       const status = get(bill.statusCol);
       if (status && !bill.statusOk(status)) continue;
-      const payName = bill.payCol ? get(bill.payCol) : '';
+      const payName = (bill.payCols || []).map(get).find(Boolean) || '';
       const acc = mapBillAccount(payName, kind, accounts, fallbackAccountId);
       if (!acc) { errors.push({ row: rowNo, message: '第 ' + rowNo + ' 行无法确定账户：' + payName }); continue; }
       const note = bill.noteCols.map(nc => get(nc)).filter(Boolean).join(' - ').slice(0, 200);
@@ -770,10 +773,13 @@
       });
     }
     const cleanTransactions = [];
+    const seenTxIds = new Set();
     for (const t of (Array.isArray(transactions) ? transactions : [])) {
-      if (!t || typeof t !== 'object' || !validateTransaction(t, cleanCategories, cleanAccounts).ok) {
+      if (!t || typeof t !== 'object' || !safeId(t.id) || !validateTransaction(t, cleanCategories, cleanAccounts).ok) {
         dropped.transactions++; continue;
       }
+      if (seenTxIds.has(t.id)) { dropped.transactions++; continue; }
+      seenTxIds.add(t.id);
       cleanTransactions.push(t);
     }
     return { transactions: cleanTransactions, accounts: cleanAccounts, categories: cleanCategories, dropped };
@@ -787,7 +793,7 @@
 
 function csvCell(v) {
   let s = String(v == null ? '' : v);
-  if (/^\s*[=+\-@\t\r]/.test(s)) s = "'" + s;
+  if (/^\s*[=+\-@\t\r']/.test(s)) s = "'" + s;
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 

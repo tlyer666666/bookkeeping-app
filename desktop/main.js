@@ -4,6 +4,11 @@ const path = require('path');
 const fs = require('fs');
 
 const isSelfcheck = process.argv.includes('--selfcheck');
+if (isSelfcheck) {
+  // 自检必须整体隔离到独立 userData：页面 init 会先用默认前缀生成周期记账并落盘，
+  // 仅靠渲染层的 bkself. 前缀切换来不及拦住这一次真实写入
+  app.setPath('userData', app.getPath('userData') + '-selfcheck');
+}
 let mainWindow = null;
 const windowState = { width: 1280, height: 800, maximized: false };
 
@@ -239,6 +244,7 @@ async function runSelfcheck() {
     result = { selftest: { pass: false, error: String((e && e.message) || e) }, perf: {} };
   }
   console.log('DESKTOPSELFCHECK ' + JSON.stringify(result));
+  try { fs.rmSync(app.getPath('userData'), { recursive: true, force: true }); } catch (e) { /* 文件被占用时留待下次清理 */ }
   app.exit(result.selftest && result.selftest.pass === true ? 0 : 1);
 }
 

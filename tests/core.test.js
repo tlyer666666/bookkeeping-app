@@ -811,6 +811,62 @@ test('detectBillKind：识别支付宝/微信/标准格式', () => {
   assert.strictEqual(core.detectBillKind('类型,日期,金额（元）'), null);
 });
 
+test('sanitizeLoadedData：剔除非法与重复交易 id', () => {
+  const cats = [{ id: 'c1', type: 'expense', name: '餐饮', icon: '🍜', subs: [] }];
+  const accs = [{ id: 'a1', name: '现金', icon: '💰', initialBalance: 0 }];
+  const mk = id => ({
+    id, type: 'expense', amount: 100, categoryId: 'c1', subcategoryId: null,
+    accountId: 'a1', toAccountId: null, date: '2026-10-01', note: '',
+  });
+  const txs = [
+    mk('t1'),
+    mk('__proto__'),
+    mk(''),
+    mk(null),
+    mk('t2'),
+    mk('t1'),
+    mk('t2'),
+  ];
+  const r = core.sanitizeLoadedData(txs, accs, cats);
+  assert.deepStrictEqual(r.transactions.map(t => t.id), ['t1', 't2'], '重复 id 只保留首个');
+  assert.strictEqual(r.dropped.transactions, 5);
+});
+
+test('toCSV/parseCSV：前导单引号的备注与标签往返保真', () => {
+  const cats = core.DEFAULT_CATEGORIES, accs = core.DEFAULT_ACCOUNTS;
+  const txs = [tx({ id: 't10', amount: 100, categoryId: 'e1', subcategoryId: null, accountId: 'acc_cash', note: "'abc", tags: ["'t"] })];
+  const csv = core.toCSV(txs, cats, accs);
+  const parsed = core.parseCSV(csv, cats, accs);
+  assert.strictEqual(parsed.ok, true, parsed.errors.join('；'));
+  assert.strictEqual(parsed.transactions[0].note, "'abc", '前导单引号备注不丢失');
+  assert.deepStrictEqual(parsed.transactions[0].tags, ["'t"], '前导单引号标签不丢失');
+});
+
+test('parseBillCsv：支付宝新版表头（交易时间/金额/收付款方式）兼容', () => {
+  const accs = core.DEFAULT_ACCOUNTS;
+  const text = [
+    '支付宝交易明细,,,,,,,',
+    '----------------------------------------,,,,,,,,',
+    '交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态',
+    '2026-10-01 12:00:00,餐饮美食,某某店,***,午餐,支出,25.50,余额,交易成功',
+    '2026-10-02 09:00:00,工资,某某公司,***,十月工资,收入,10000.00,招商银行(1234),交易成功',
+    '2026-10-03 10:00:00,转账,某某,***,转账,支出,50.00,余额,转账成功',
+  ].join('\r\n');
+  const r = core.parseBillCsv(text, 'alipay', accs, { fallbackAccountId: 'acc_cash' });
+  assert.deepStrictEqual(r.errors, []);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.transactions.length, 3);
+  assert.strictEqual(r.transactions[0].amount, 2550);
+  assert.strictEqual(r.transactions[0].type, 'expense');
+  assert.strictEqual(r.transactions[0].accountId, 'acc_alipay', '「余额」落支付宝账户');
+  assert.strictEqual(r.transactions[1].accountId, 'acc_bank', '「招商银行」映射到银行卡');
+  assert.strictEqual(r.transactions[2].type, 'expense', '转账成功状态按支出保留');
+});
+
+test('detectBillKind：识别支付宝新版标题', () => {
+  assert.strictEqual(core.detectBillKind('支付宝交易明细\n交易时间,交易分类'), 'alipay');
+});
+
 /* ---------- run ---------- */
 
 (async () => {

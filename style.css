@@ -129,10 +129,11 @@ input, select { font-family: inherit; font-size: 14px; }
 .btn-small { padding: 4px 12px; font-size: 13px; border-radius: var(--radius-xs); }
 
 /* 主标签导航栏 */
+/* top 必须等于顶栏实际高度：上下 padding 20px + 内容最高行（month-nav：32px 图标 + 边框内边距 6px）+ 底边框 1px = 59px，改顶栏布局时需同步 */
 .tabs {
   display: flex; background: var(--card);
   border-bottom: 1px solid var(--line);
-  position: sticky; top: 53px; z-index: 25;
+  position: sticky; top: 59px; z-index: 25;
 }
 .tab {
   flex: 1; border: none; background: transparent; padding: 10px 0;
