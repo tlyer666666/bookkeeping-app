@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖（跳过脚本，Electron 运行时由打包器自行下载）
+        run: npm ci --ignore-scripts
+      - name: 语法检查
+        run: |
+          node --check core.js
+          node --check app.js
+      - name: 单元测试
+        run: node tests/core.test.js
+      - name: 生成图标
+        run: |
+          node tools/make-icons.js
+          node tools/make-ico.js
+      - name: 打包 Windows exe
+        run: node tools/dist.js
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      - name: 上传到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/**/*.exe
+          fail_on_unmatched_files: true

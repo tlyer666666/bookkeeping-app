@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: 安装 ESLint（跳过脚本，避免拉取 Electron 二进制）
+        run: npm install --no-save --ignore-scripts eslint
+      - name: ESLint
+        run: npx eslint .
+      - name: 单元测试
+        run: node tests/core.test.js
