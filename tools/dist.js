@@ -34,8 +34,9 @@ const { packager } = require('@electron/packager');
       /^\/CONTRIBUTING\.md$/,
     ],
   });
-  // 产物名不依赖打包环境的推断结果，统一重命名为带版本号的规范文件名
-  const target = `记账管理系统-v${version}-win64.exe`;
+  // 产物名不依赖打包环境的推断结果，统一重命名为带版本号的规范文件名；
+  // 使用纯 ASCII 避免 CI 上传链路丢失非 ASCII 字符
+  const target = `Bookkeeping-v${version}-win64.exe`;
   for (const dir of paths) {
     for (const f of fs.readdirSync(dir)) {
       if (f.toLowerCase().endsWith('.exe') && f !== target) {
