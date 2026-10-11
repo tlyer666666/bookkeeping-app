@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'bk-cache-v5';
+const CACHE = 'bk-cache-v6';
 const ASSETS = [
   './',
   'index.html',
@@ -16,7 +16,7 @@ self.addEventListener('install', e => {
     caches.open(CACHE).then(c =>
       Promise.allSettled(ASSETS.map(a => {
         const url = new URL(a, self.location.origin).href;
-        return fetch(url).then(resp => {
+        return fetch(url, { cache: 'reload' }).then(resp => {
           if (!resp.ok) throw new Error(a + ' -> ' + resp.status);
           return c.put(a, resp);
         });
@@ -49,7 +49,7 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then(hit =>
       hit || fetch(e.request).then(resp => {
-        if (resp.ok && (cacheable || isNavigate)) {
+        if (resp.ok && !url.search && (cacheable || isNavigate)) {
           const copy = resp.clone();
           caches.open(CACHE).then(c => c.put(e.request, copy));
         }

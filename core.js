@@ -231,6 +231,7 @@
       if (!accIds.has(t.toAccountId)) errors.push('转账目标账户不存在');
       else if (t.toAccountId === t.accountId) errors.push('转账双方不能是同一账户');
       if (t.categoryId) errors.push('转账不需要选择分类');
+      if (t.subcategoryId != null && t.subcategoryId !== '') errors.push('转账不需要选择子分类');
     } else if (type === 'expense' || type === 'income') {
       const cat = findCategory(categories, t.categoryId);
       if (!cat) errors.push('分类不存在');
@@ -500,7 +501,7 @@
     }
     return {
       hasBudget: true, totalFen: total, spentFen: spent,
-      remainingFen: total - spent, percent: Math.floor(spent * 100 / total),
+      remainingFen: total - spent, percent: total > 0 ? Math.floor(spent * 100 / total) : 0,
       level: levelOf(ratio), perCategory,
     };
   }

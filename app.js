@@ -123,6 +123,10 @@
   const PALETTE = ['#e05656', '#f0a500', '#4a90d9', '#2f9e63', '#9b6fd6', '#f06292',
     '#26a69a', '#ff8a65', '#7986cb', '#a1887f', '#78909c', '#c0ca33'];
 
+  function emptyFilter() {
+    return { type: '', categoryId: '', accountId: '', tag: '', day: '', minYuan: '', maxYuan: '', keyword: '' };
+  }
+
   const state = {
     storage: null,
     available: true,
@@ -135,7 +139,7 @@
     monthKey: Core.monthKeyOf(Core.todayStr()),
     tab: 'detail',
     detailView: 'list',
-    filter: { type: '', categoryId: '', accountId: '', tag: '', day: '', keyword: '' },
+    filter: emptyFilter(),
     editingId: null,
     formType: 'expense',
     statsType: 'expense',
@@ -544,17 +548,20 @@
     if (state.filter.day) {
       const d = Number(state.filter.day);
       const dateStr = state.monthKey + '-' + pad2(d);
-      const dayTx = state.transactions.filter(t => t.date === dateStr);
+      const dayTx = Core.filterTransactions(state.transactions, Object.assign({ monthKey: state.monthKey, day: d }, activeFilter()), state.categories);
       const exp = dayTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
       const inc = dayTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
       const parts = [];
       if (exp) parts.push('支 ' + Core.formatFen(exp));
       if (inc) parts.push('收 ' + Core.formatFen(inc));
       const subHead = parts.length ? ' · ' + parts.join(' / ') : '';
+      const filterNote = (state.filter.type || state.filter.categoryId || state.filter.accountId
+        || state.filter.tag || state.filter.keyword || state.filter.minYuan || state.filter.maxYuan)
+        ? '（已应用当前筛选）' : '';
       dayDetailHtml = `
       <div class="card cal-day-detail">
         <div class="day-group-head">
-          <span>${Number(state.monthKey.slice(5))}月${d}日 ${weekdayOf(dateStr)}${subHead}</span>
+          <span>${Number(state.monthKey.slice(5))}月${d}日 ${weekdayOf(dateStr)}${subHead}${filterNote}</span>
           <button class="btn btn-small" data-action="clear-day">取消选中 ✕</button>
         </div>
         ${dayTx.length ? dayTx.map(txItemHtml).join('') : '<div class="empty-tip">当日暂无记录</div>'}
@@ -821,7 +828,7 @@
       ctx.closePath();
       ctx.fillStyle = it.color || PALETTE[i % PALETTE.length];
       ctx.fill();
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = themeColor('--card', '#ffffff');
       ctx.lineWidth = 2;
       ctx.stroke();
       a0 = a1;
@@ -1510,7 +1517,7 @@
       state.settings = v.data.settings && typeof v.data.settings === 'object' ? v.data.settings : { currency: '¥' };
       state.recurrings = Array.isArray(v.data.recurrings) ? v.data.recurrings : [];
       state.trash = Array.isArray(v.data.trash) ? v.data.trash : [];
-      state.filter = { type: '', categoryId: '', accountId: '', tag: '', day: '', minYuan: '', maxYuan: '', keyword: '' };
+      state.filter = emptyFilter();
       state.drillCatId = null;
       if (!saveAll()) {
         state.transactions = prev.transactions;
@@ -1637,7 +1644,7 @@
         state.settings = { currency: '¥' };
         state.recurrings = [];
         state.trash = [];
-        state.filter = { type: '', categoryId: '', accountId: '', tag: '', day: '', minYuan: '', maxYuan: '', keyword: '' };
+        state.filter = emptyFilter();
         state.drillCatId = null;
         saveAll();
         applyTheme();
@@ -1694,6 +1701,7 @@
           saveKey('transactions');
           state.editingId = copy.id;
           render();
+          openTxModal(copy.id);
           toast('已创建副本（日期改为今天），可继续修改');
           break;
         }

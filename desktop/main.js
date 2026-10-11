@@ -40,7 +40,7 @@ function loadWindowState() {
 function saveWindowState() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try {
-    const b = mainWindow.getBounds();
+    const b = mainWindow.getNormalBounds();
     fs.writeFileSync(stateFile(), JSON.stringify({
       width: b.width, height: b.height, x: b.x, y: b.y, maximized: mainWindow.isMaximized(),
     }));
@@ -102,7 +102,7 @@ function createWindow() {
     minWidth: 360,
     minHeight: 480,
     title: '记账管理系统',
-    backgroundColor: '#f4f5f7',
+    backgroundColor: '#f5f6fa',
     show: !isSelfcheck,
     icon: path.join(__dirname, '..', 'icons', 'icon-192.png'),
     webPreferences: {
@@ -119,6 +119,19 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.webContents.on('will-navigate', e => e.preventDefault());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('unresponsive', async () => {
+    try {
+      const r = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: '界面未响应',
+        message: '界面暂时没有响应，可能是正在处理大量数据。',
+        buttons: ['重新加载界面', '继续等待'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (r.response === 0 && mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+    } catch (e) { /* 窗口已销毁时忽略 */ }
+  });
   let reloadCount = 0;
   let reloadWindowStart = 0;
   mainWindow.webContents.on('render-process-gone', (event, details) => {

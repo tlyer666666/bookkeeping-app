@@ -144,6 +144,7 @@ test('validateTransaction：转账规则与账户存在性', () => {
   assert.ok(!core.validateTransaction(tx({ type: 'transfer', toAccountId: 'acc_cash' }), cats, accs).ok, '同账户');
   assert.ok(!core.validateTransaction(tx({ type: 'transfer' }), cats, accs).ok, '缺目标账户');
   assert.ok(!core.validateTransaction(tx({ type: 'transfer', toAccountId: 'acc_bank', categoryId: 'e1' }), cats, accs).ok, '转账不应有分类');
+  assert.ok(!core.validateTransaction(tx({ type: 'transfer', toAccountId: 'acc_bank', subcategoryId: 'e1s1' }), cats, accs).ok, '转账不应有子分类');
   assert.ok(!core.validateTransaction(tx({ accountId: 'nope' }), cats, accs).ok, '未知账户');
   assert.ok(!core.validateTransaction(tx({ type: 'transfer', toAccountId: 'nope' }), cats, accs).ok, '未知目标账户');
 });
@@ -298,6 +299,17 @@ test('budgetStatus：无预算时 hasBudget=false', () => {
   assert.strictEqual(r.hasBudget, false);
   const r2 = core.budgetStatus({ total: 0, byCategory: {} }, []);
   assert.strictEqual(r2.hasBudget, false);
+});
+
+test('budgetStatus：仅分类预算时 percent 为有限数', () => {
+  const r = core.budgetStatus({ total: 0, byCategory: { e1: 1000 } }, [
+    { categoryId: 'e1', name: 'x', icon: 'x', amountFen: 500, subs: [] },
+  ]);
+  assert.strictEqual(r.hasBudget, true);
+  assert.ok(Number.isFinite(r.percent), 'percent 必须是有限数，实际 ' + r.percent);
+  assert.strictEqual(r.percent, 0);
+  const r2 = core.budgetStatus({ total: 0, byCategory: {} }, []);
+  assert.ok(!Number.isFinite(r2.percent) || Number.isFinite(r2.percent), '空预算路径不抛错');
 });
 
 test('validateImport：合法与各类非法数据', () => {
