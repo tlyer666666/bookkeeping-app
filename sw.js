@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'bk-cache-v6';
+const CACHE = 'bk-cache-v7';
 const ASSETS = [
   './',
   'index.html',

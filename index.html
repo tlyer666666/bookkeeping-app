@@ -18,6 +18,7 @@
 <body>
 <div id="storage-warn" class="storage-warn hidden">⚠️ 当前环境无法保存数据（可能是隐私模式或浏览器限制），本次记账不会被保留！</div>
 <div id="sync-warn" class="storage-warn hidden">🔄 数据已在其他窗口被修改。<button class="warn-btn" data-action="reload-app">刷新页面</button></div>
+<div id="update-warn" class="update-warn hidden">🎉 新版本已就绪<button class="warn-btn" data-action="reload-app">刷新使用</button></div>
 
 <header class="topbar">
   <div class="brand"><h1>📒 记账<span class="brand-sub">管理系统</span></h1></div>
@@ -92,7 +93,7 @@
         <button type="button" id="tx-delete" class="btn-danger hidden" data-action="delete-tx">删除</button>
         <span class="spacer"></span>
         <button type="button" class="btn" data-action="close-modal">取消</button>
-        <button type="submit" class="btn-primary">保存</button>
+        <button type="submit" class="btn-primary" title="Ctrl+Enter 快捷保存">保存</button>
       </div>
     </form>
   </div>
@@ -118,7 +119,7 @@
       <div class="modal-actions">
         <span class="spacer"></span>
         <button type="button" class="btn" data-action="close-modal">取消</button>
-        <button type="submit" class="btn-primary">保存</button>
+        <button type="submit" class="btn-primary" title="Ctrl+Enter 快捷保存">保存</button>
       </div>
     </form>
   </div>
@@ -138,7 +139,7 @@
         <button type="button" id="acc-delete" class="btn-danger hidden" data-action="delete-acc">删除</button>
         <span class="spacer"></span>
         <button type="button" class="btn" data-action="close-modal">取消</button>
-        <button type="submit" class="btn-primary">保存</button>
+        <button type="submit" class="btn-primary" title="Ctrl+Enter 快捷保存">保存</button>
       </div>
     </form>
   </div>
@@ -192,7 +193,7 @@
         <button type="button" id="rec-delete" class="btn-danger hidden" data-action="delete-rec">删除</button>
         <span class="spacer"></span>
         <button type="button" class="btn" data-action="close-modal">取消</button>
-        <button type="submit" class="btn-primary">保存</button>
+        <button type="submit" class="btn-primary" title="Ctrl+Enter 快捷保存">保存</button>
       </div>
     </form>
   </div>

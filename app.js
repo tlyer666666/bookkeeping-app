@@ -154,6 +154,19 @@
   };
 
   let pendingConfirm = null;
+  let lastFocusEl = null;
+
+  function rememberFocus() {
+    lastFocusEl = document.activeElement;
+  }
+
+  function restoreFocus() {
+    const el = lastFocusEl;
+    lastFocusEl = null;
+    if (el && el.isConnected && typeof el.focus === 'function') {
+      try { el.focus(); } catch (e) { /* 忽略无法聚焦的元素 */ }
+    }
+  }
   let lastConfirmOkAt = 0;
 
   /* ================= 初始化与持久化 ================= */
@@ -182,6 +195,10 @@
   function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     if (location.protocol !== 'https:' && location.protocol !== 'http:') return;
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) $('#update-warn').classList.remove('hidden');
+    });
     navigator.serviceWorker.register('sw.js').then(() => {
       document.documentElement.dataset.sw = 'active';
     }).catch(() => { /* file:// 或受限环境自动跳过，不影响使用 */ });
@@ -294,6 +311,7 @@
   }
 
   function askConfirm(text, cb) {
+    rememberFocus();
     pendingConfirm = cb;
     $('#confirm-text').textContent = text;
     modalOpenedAt = Date.now();
@@ -310,6 +328,7 @@
       if (!$(sel).classList.contains('hidden')) {
         $(sel).classList.add('hidden');
         if (sel === '#confirm-modal') pendingConfirm = null;
+        restoreFocus();
         return;
       }
     }
@@ -318,6 +337,7 @@
   function closeAllModals() {
     ['#confirm-modal', '#tx-modal', '#rec-modal', '#cat-modal', '#acc-modal'].forEach(hide);
     pendingConfirm = null;
+    restoreFocus();
   }
 
   function reloadFromStorage() {
@@ -679,6 +699,7 @@
   function onRecTypeChanged() { applyFormType(FORMS.rec, state.recFormType); }
 
   function openTxModal(txId) {
+    rememberFocus();
     const t = txId ? state.transactions.find(x => x.id === txId) : null;
     state.editingId = txId || null;
     state.formType = t ? t.type : 'expense';
@@ -1232,6 +1253,7 @@
   }
 
   function openCatModal(catId) {
+    rememberFocus();
     const cat = catId ? Core.findCategory(state.categories, catId) : null;
     state.catEditorId = catId || null;
     state.catDraft = cat ? deepCopy(cat) : { id: null, type: 'expense', name: '', icon: '', subs: [] };
@@ -1333,6 +1355,7 @@
   }
 
   function openAccModal(accId) {
+    rememberFocus();
     const a = accId ? state.accounts.find(x => x.id === accId) : null;
     state.accEditorId = accId || null;
     $('#acc-modal-title').textContent = '编辑账户';
@@ -1371,6 +1394,7 @@
   /* ================= 周期记账与 CSV ================= */
 
   function openRecModal(recId) {
+    rememberFocus();
     const r = recId ? state.recurrings.find(x => x.id === recId) : null;
     state.recEditorId = recId || null;
     state.recFormType = r ? r.type : 'expense';
@@ -1865,6 +1889,15 @@
     document.addEventListener('keydown', e => {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Escape') { closeModal(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        const formMap = { '#tx-modal': 'tx-form', '#rec-modal': 'rec-form', '#cat-modal': 'cat-form', '#acc-modal': 'acc-form' };
+        const openSel = Object.keys(formMap).find(s => !$(s).classList.contains('hidden'));
+        if (openSel) {
+          e.preventDefault();
+          $('#' + formMap[openSel]).dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        }
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'Enter') {
         if (e.target && e.target.id === 'new-cat-name-expense') {
@@ -1891,6 +1924,11 @@
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       if (anyModalOpen) return;
       if (e.key === 'n' || e.key === 'N') { openTxModal(null); return; }
+      if (e.key === '/') {
+        const kw = document.querySelector('[data-filter="keyword"]');
+        if (kw) { e.preventDefault(); kw.focus(); }
+        return;
+      }
       if (e.key === 'ArrowLeft') { state.monthKey = Core.shiftMonth(state.monthKey, -1); render(); return; }
       if (e.key === 'ArrowRight') { state.monthKey = Core.shiftMonth(state.monthKey, 1); render(); }
     });
