@@ -178,6 +178,8 @@
     return dateAt(ny, nm, day);
   }
 
+  const MAX_FEN = 9e13; // 9000 亿元（分），保证 * 100 仍在安全整数范围内
+
   function parseYuanToFen(str) {
     if (typeof str !== 'string' && typeof str !== 'number') return null;
     const s = String(str).trim();
@@ -185,14 +187,16 @@
     let intPart = s, frac = '';
     const dot = s.indexOf('.');
     if (dot >= 0) { intPart = s.slice(0, dot); frac = s.slice(dot + 1); }
-    let fen = Number(intPart) * 100;
+    let fenBig = BigInt(intPart) * 100n;
     if (frac.length <= 2) {
-      fen += Number(frac.padEnd(2, '0') || '0');
+      fenBig += BigInt(frac.padEnd(2, '0') || '0');
     } else {
-      fen += Number(frac.slice(0, 2));
-      if (Number(frac[2]) >= 5) fen += 1;
+      fenBig += BigInt(frac.slice(0, 2));
+      if (Number(frac[2]) >= 5) fenBig += 1n;
     }
-    return fen > 0 && fen <= Number.MAX_SAFE_INTEGER ? fen : null;
+    if (fenBig <= 0n || fenBig > BigInt(MAX_FEN)) return null;
+    const fen = Number(fenBig);
+    return Number.isSafeInteger(fen) ? fen : null;
   }
 
   function formatFen(fen) {
@@ -217,15 +221,19 @@
   }
 
   function validateTransaction(t, categories, accounts) {
-    if (!t || typeof t !== 'object') return { ok: false, errors: ['数据不完整'] };
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return { ok: false, errors: ['数据不完整'] };
     const errors = [];
     const type = t.type;
     if (!TX_TYPES.includes(type)) errors.push('类型必须是支出、收入或转账');
-    if (!Number.isInteger(t.amount) || t.amount <= 0 || t.amount > Number.MAX_SAFE_INTEGER) errors.push('金额必须是大于 0 且不超过上限的数字');
+    if (!Number.isSafeInteger(t.amount) || t.amount <= 0 || t.amount > MAX_FEN) errors.push('金额必须是大于 0 且不超过上限的数字');
     if (!isValidDate(t.date)) errors.push('日期格式不正确');
     if (t.note != null && (typeof t.note !== 'string' || t.note.length > 200)) errors.push('备注必须是 200 字以内的文本');
     if (!validTags(t.tags)) errors.push('标签最多 5 个，单个不超过 16 个字符');
-    const accIds = new Set((accounts || []).map(a => a.id));
+    const accIds = new Set(
+      (Array.isArray(accounts) ? accounts : [])
+        .filter(a => a && typeof a === 'object' && !Array.isArray(a) && safeId(a.id))
+        .map(a => a.id)
+    );
     if (!accIds.has(t.accountId)) errors.push('账户不存在');
     if (type === 'transfer') {
       if (!accIds.has(t.toAccountId)) errors.push('转账目标账户不存在');
@@ -648,39 +656,53 @@
     if (th != null && th !== 'auto' && th !== 'light' && th !== 'dark') {
       errors.push('settings.theme 不合法');
     }
-    const ids = new Set();
-    for (const t of d.transactions) {
-      if (!t || typeof t !== 'object' || !t.id || ids.has(t.id) || !safeId(t.id)) {
-        errors.push('交易记录 ID 缺失、重复或不合法'); break;
-      }
-      ids.add(t.id);
-      const v = validateTransaction(t, d.categories, d.accounts);
-      if (!v.ok) { errors.push('交易 ' + t.id + ' 校验失败：' + v.errors.join('；')); break; }
-    }
     const accIds = new Set();
     const catIds = new Set();
     const catTypeMap = new Map();
     if (!errors.length) {
       for (const a of d.accounts) {
-        if (!a || typeof a !== 'object' || !a.id || accIds.has(a.id) || !safeId(a.id)) { errors.push('账户 ID 缺失、重复或不合法'); break; }
+        if (!a || typeof a !== 'object' || Array.isArray(a) || !safeId(a.id) || accIds.has(a.id)) {
+          errors.push('账户 ID 缺失、重复或不合法'); break;
+        }
         accIds.add(a.id);
-        if (!a.name || typeof a.icon !== 'string' || a.name.length > 30 || !Number.isInteger(a.initialBalance)) { errors.push('账户数据不合法：' + a.id); break; }
+        if (typeof a.name !== 'string' || !a.name || a.name.length > 30 || typeof a.icon !== 'string'
+          || !Number.isSafeInteger(a.initialBalance) || Math.abs(a.initialBalance) > MAX_FEN) {
+          errors.push('账户数据不合法：' + a.id); break;
+        }
       }
     }
     if (!errors.length) {
       for (const c of d.categories) {
-        if (!c || typeof c !== 'object' || !c.id || catIds.has(c.id) || !safeId(c.id)) { errors.push('分类 ID 缺失、重复或不合法'); break; }
+        if (!c || typeof c !== 'object' || Array.isArray(c) || !safeId(c.id) || catIds.has(c.id)) {
+          errors.push('分类 ID 缺失、重复或不合法'); break;
+        }
         catIds.add(c.id);
         catTypeMap.set(c.id, c.type);
-        if ((c.type !== 'expense' && c.type !== 'income') || !c.name || c.name.length > 30 || typeof c.icon !== 'string' || !Array.isArray(c.subs)) {
+        if ((c.type !== 'expense' && c.type !== 'income')
+          || typeof c.name !== 'string' || !c.name || c.name.length > 30
+          || typeof c.icon !== 'string' || !Array.isArray(c.subs)) {
           errors.push('分类数据不合法：' + c.id); break;
         }
         let badSub = false;
         for (const s of c.subs) {
-          if (!s || typeof s !== 'object' || !s.id || !s.name || s.name.length > 30 || catIds.has(s.id) || !safeId(s.id)) { badSub = true; break; }
+          if (!s || typeof s !== 'object' || Array.isArray(s) || !safeId(s.id)
+            || typeof s.name !== 'string' || !s.name || s.name.length > 30 || catIds.has(s.id)) {
+            badSub = true; break;
+          }
           catIds.add(s.id);
         }
         if (badSub) { errors.push('子分类数据不合法：' + c.id); break; }
+      }
+    }
+    const ids = new Set();
+    if (!errors.length) {
+      for (const t of d.transactions) {
+        if (!t || typeof t !== 'object' || Array.isArray(t) || !safeId(t.id) || ids.has(t.id)) {
+          errors.push('交易记录 ID 缺失、重复或不合法'); break;
+        }
+        ids.add(t.id);
+        const v = validateTransaction(t, d.categories, d.accounts);
+        if (!v.ok) { errors.push('交易 ' + t.id + ' 校验失败：' + v.errors.join('；')); break; }
       }
     }
     if (!errors.length) {
@@ -688,9 +710,9 @@
         if (!/^\d{4}-\d{2}$/.test(mk)) { errors.push('预算月份键不合法：' + mk); break; }
         const e = d.budgets[mk];
         const okShape = e && typeof e === 'object' && !Array.isArray(e)
-          && Number.isInteger(e.total) && e.total >= 0
+          && Number.isSafeInteger(e.total) && e.total >= 0 && e.total <= MAX_FEN
           && e.byCategory && typeof e.byCategory === 'object' && !Array.isArray(e.byCategory)
-          && Object.keys(e.byCategory).every(k => Number.isInteger(e.byCategory[k]) && e.byCategory[k] >= 0);
+          && Object.keys(e.byCategory).every(k => Number.isSafeInteger(e.byCategory[k]) && e.byCategory[k] >= 0 && e.byCategory[k] <= MAX_FEN);
         if (!okShape) { errors.push('预算数据不合法：' + mk); break; }
       }
     }
@@ -698,25 +720,27 @@
       if (!Array.isArray(d.recurrings)) {
         errors.push('周期模板数据不合法');
       } else {
+        const recIds = new Set();
         for (const rec of d.recurrings) {
-          const base = rec && typeof rec === 'object' && safeId(rec.id)
+          const base = rec && typeof rec === 'object' && !Array.isArray(rec) && safeId(rec.id) && !recIds.has(rec.id)
             && safeId(rec.accountId) && accIds.has(rec.accountId)
             && TX_TYPES.includes(rec.type)
-            && Number.isInteger(rec.amount) && rec.amount > 0
+            && Number.isSafeInteger(rec.amount) && rec.amount > 0 && rec.amount <= MAX_FEN
             && RECURRING_FREQUENCIES.includes(rec.frequency)
             && isValidDate(rec.nextDate)
             && (rec.tags == null || validTags(rec.tags))
             && (rec.subcategoryId == null || typeof rec.subcategoryId === 'string')
             && (rec.note == null || (typeof rec.note === 'string' && rec.note.length <= 200))
             && (rec.anchorDay == null || (Number.isInteger(rec.anchorDay) && rec.anchorDay >= 1 && rec.anchorDay <= 31));
+          if (base) recIds.add(rec.id);
           const recCat = base ? d.categories.find(c => c.id === rec.categoryId) : null;
           const subOk = !base ? false
             : (rec.subcategoryId == null || rec.subcategoryId === ''
               ? true
-              : !!recCat && (recCat.subs || []).some(s => s.id === rec.subcategoryId));
+              : rec.type !== 'transfer' && !!recCat && (recCat.subs || []).some(s => s.id === rec.subcategoryId));
           const shape = !base || !subOk ? false
             : (rec.type === 'transfer'
-              ? rec.categoryId == null && !!safeId(rec.toAccountId) && accIds.has(rec.toAccountId)
+              ? rec.categoryId == null && !!safeId(rec.toAccountId) && accIds.has(rec.toAccountId) && rec.toAccountId !== rec.accountId
               : !!safeId(rec.categoryId) && catTypeMap.get(rec.categoryId) === rec.type && rec.toAccountId == null);
           if (!base || !shape) { errors.push('周期模板数据不合法：' + (rec && rec.id)); break; }
         }
@@ -727,7 +751,9 @@
         errors.push('回收站数据不合法');
       } else {
         for (const t of d.trash) {
-          if (!t || typeof t !== 'object' || !t.id || ids.has(t.id) || !safeId(t.id)) { errors.push('回收站数据不合法：' + (t && t.id)); break; }
+          if (!t || typeof t !== 'object' || Array.isArray(t) || !safeId(t.id) || ids.has(t.id)) {
+            errors.push('回收站数据不合法：' + (t && t.id)); break;
+          }
           ids.add(t.id);
           const v = validateTransaction(t, d.categories, d.accounts);
           if (!v.ok) { errors.push('回收站 ' + t.id + ' 校验失败：' + v.errors.join('；')); break; }
@@ -747,28 +773,40 @@
   function sanitizeLoadedData(transactions, accounts, categories) {
     const dropped = { transactions: 0, accounts: 0, categories: 0 };
     const cleanAccounts = [];
+    const seenAccIds = new Set();
     for (const a of (Array.isArray(accounts) ? accounts : [])) {
-      if (!a || typeof a !== 'object' || !safeId(a.id) || !a.name) { dropped.accounts++; continue; }
+      if (!a || typeof a !== 'object' || Array.isArray(a) || !safeId(a.id) || seenAccIds.has(a.id)
+        || typeof a.name !== 'string' || !a.name) {
+        dropped.accounts++; continue;
+      }
+      seenAccIds.add(a.id);
       cleanAccounts.push({
         id: a.id,
-        name: String(a.name).slice(0, 30),
+        name: a.name.slice(0, 30),
         icon: typeof a.icon === 'string' ? a.icon : '💰',
-        initialBalance: Number.isInteger(a.initialBalance) ? a.initialBalance : 0,
+        initialBalance: Number.isSafeInteger(a.initialBalance) && Math.abs(a.initialBalance) <= MAX_FEN ? a.initialBalance : 0,
       });
     }
     const cleanCategories = [];
+    const seenCatIds = new Set();
     for (const c of (Array.isArray(categories) ? categories : [])) {
-      if (!c || typeof c !== 'object' || !safeId(c.id) || !c.name || (c.type !== 'expense' && c.type !== 'income')) {
+      if (!c || typeof c !== 'object' || Array.isArray(c) || !safeId(c.id) || seenCatIds.has(c.id)
+        || typeof c.name !== 'string' || !c.name || (c.type !== 'expense' && c.type !== 'income')) {
         dropped.categories++; continue;
       }
+      seenCatIds.add(c.id);
       const subs = [];
       if (Array.isArray(c.subs)) {
         for (const s of c.subs) {
-          if (s && typeof s === 'object' && safeId(s.id) && s.name) subs.push({ id: s.id, name: String(s.name).slice(0, 30) });
+          if (s && typeof s === 'object' && !Array.isArray(s) && safeId(s.id) && !seenCatIds.has(s.id)
+            && typeof s.name === 'string' && s.name) {
+            seenCatIds.add(s.id);
+            subs.push({ id: s.id, name: s.name.slice(0, 30) });
+          }
         }
       }
       cleanCategories.push({
-        id: c.id, type: c.type, name: String(c.name).slice(0, 30),
+        id: c.id, type: c.type, name: c.name.slice(0, 30),
         icon: typeof c.icon === 'string' ? c.icon : (c.type === 'expense' ? '🏷️' : '💰'),
         subs,
       });
@@ -776,7 +814,7 @@
     const cleanTransactions = [];
     const seenTxIds = new Set();
     for (const t of (Array.isArray(transactions) ? transactions : [])) {
-      if (!t || typeof t !== 'object' || !safeId(t.id) || !validateTransaction(t, cleanCategories, cleanAccounts).ok) {
+      if (!t || typeof t !== 'object' || Array.isArray(t) || !safeId(t.id) || !validateTransaction(t, cleanCategories, cleanAccounts).ok) {
         dropped.transactions++; continue;
       }
       if (seenTxIds.has(t.id)) { dropped.transactions++; continue; }
@@ -982,7 +1020,7 @@ function csvCell(v) {
     DEFAULT_CATEGORIES, DEFAULT_ACCOUNTS, KEYS,
     Storage, createBrowserStorage, memBackend,
     genId, todayStr, monthKeyOf, shiftMonth, daysInMonth, isValidDate, addDays, addMonthsClamped,
-    parseYuanToFen, formatFen,
+    parseYuanToFen, formatFen, MAX_FEN, safeId,
     validateTransaction, validateImport, sanitizeLoadedData,
     accountBalances, filterTransactions, monthSummary,
     categoryTotals, dailyTotals, monthlyTrend, budgetStatus, levelOf,

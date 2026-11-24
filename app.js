@@ -21,33 +21,67 @@
   }
   const pad2 = n => String(n).padStart(2, '0');
 
+  function ratGcd(a, b) {
+    a = a < 0n ? -a : a;
+    b = b < 0n ? -b : b;
+    while (b !== 0n) { const t = a % b; a = b; b = t; }
+    return a || 1n;
+  }
+  function makeRat(n, d) {
+    if (d === 0n) throw new Error('除数为 0');
+    if (d < 0n) { n = -n; d = -d; }
+    const g = ratGcd(n, d);
+    return { n: n / g, d: d / g };
+  }
+  function ratAdd(a, b) { return makeRat(a.n * b.d + b.n * a.d, a.d * b.d); }
+  function ratSub(a, b) { return makeRat(a.n * b.d - b.n * a.d, a.d * b.d); }
+  function ratMul(a, b) { return makeRat(a.n * b.n, a.d * b.d); }
+  function ratDiv(a, b) {
+    if (b.n === 0n) throw new Error('除数为 0');
+    return makeRat(a.n * b.d, a.d * b.n);
+  }
+  function parseDecimalRat(token) {
+    if (!/^\d+(\.\d+)?$/.test(token)) throw new Error('数字不合法');
+    const dot = token.indexOf('.');
+    if (dot < 0) return { n: BigInt(token), d: 1n };
+    const intPart = token.slice(0, dot);
+    const frac = token.slice(dot + 1);
+    return makeRat(BigInt(intPart + frac), 10n ** BigInt(frac.length));
+  }
+
   function evalAmountExpr(s) {
+    if (typeof s !== 'string') throw new Error('表达式不合法');
     let i = 0;
-    const skip = () => { while (i < s.length && s[i] === ' ') i++; };
+    let depth = 0;
+    const skip = () => { while (i < s.length && /\s/.test(s[i])) i++; };
     function factor() {
-      skip();
-      if (s[i] === '(') {
-        i++;
-        const v = expr();
+      if (++depth > 64) throw new Error('表达式嵌套过深');
+      try {
         skip();
-        if (s[i] !== ')') throw new Error('括号不匹配');
-        i++;
-        return v;
+        if (s[i] === '(') {
+          i++;
+          const v = expr();
+          skip();
+          if (s[i] !== ')') throw new Error('括号不匹配');
+          i++;
+          return v;
+        }
+        if (s[i] === '+') { i++; return factor(); }
+        if (s[i] === '-') { i++; const v = factor(); return { n: -v.n, d: v.d }; }
+        const start = i;
+        while (i < s.length && /[0-9.]/.test(s[i])) i++;
+        if (start === i) throw new Error('缺少数字');
+        return parseDecimalRat(s.slice(start, i));
+      } finally {
+        depth--;
       }
-      if (s[i] === '-') { i++; return -factor(); }
-      const start = i;
-      while (i < s.length && /[0-9.]/.test(s[i])) i++;
-      if (start === i) throw new Error('缺少数字');
-      const v = Number(s.slice(start, i));
-      if (!isFinite(v)) throw new Error('数字不合法');
-      return v;
     }
     function term() {
       let v = factor();
       for (;;) {
         skip();
-        if (s[i] === '*') { i++; v *= factor(); }
-        else if (s[i] === '/') { i++; const d = factor(); if (d === 0) throw new Error('除数为 0'); v /= d; }
+        if (s[i] === '*') { i++; v = ratMul(v, factor()); }
+        else if (s[i] === '/') { i++; v = ratDiv(v, factor()); }
         else return v;
       }
     }
@@ -55,15 +89,25 @@
       let v = term();
       for (;;) {
         skip();
-        if (s[i] === '+') { i++; v += term(); }
-        else if (s[i] === '-') { i++; v -= term(); }
+        if (s[i] === '+') { i++; v = ratAdd(v, term()); }
+        else if (s[i] === '-') { i++; v = ratSub(v, term()); }
         else return v;
       }
     }
     const v = expr();
     skip();
     if (i !== s.length) throw new Error('存在无法解析的字符');
-    return v;
+    // 精确转换为分，采用远离零四舍五入（half-away-from-zero）
+    const num = v.n * 100n;
+    const den = v.d;
+    const neg = num < 0n;
+    const absNum = neg ? -num : num;
+    let q = absNum / den;
+    if ((absNum % den) * 2n >= den) q += 1n;
+    const fenBig = neg ? -q : q;
+    const maxFen = BigInt(Core.MAX_FEN || Number.MAX_SAFE_INTEGER);
+    if (fenBig < -maxFen || fenBig > maxFen) throw new Error('金额超出范围');
+    return Number(fenBig);
   }
 
   function parseAmountInput(str) {
@@ -71,9 +115,9 @@
     if (!/[+\-*/]/.test(s)) return Core.parseYuanToFen(s);
     if (!/^[0-9+\-*/().\s]+$/.test(s)) return null;
     try {
-      const val = evalAmountExpr(s);
-      const fen = Math.round(val * 100);
-      return fen > 0 && fen <= Number.MAX_SAFE_INTEGER ? fen : null;
+      const fen = evalAmountExpr(s);
+      const maxFen = Core.MAX_FEN || Number.MAX_SAFE_INTEGER;
+      return Number.isSafeInteger(fen) && fen > 0 && fen <= maxFen ? fen : null;
     } catch (e) {
       return null;
     }
@@ -204,6 +248,34 @@
     }).catch(() => { /* file:// 或受限环境自动跳过，不影响使用 */ });
   }
 
+  function sanitizeState() {
+    if (!Array.isArray(state.transactions)) state.transactions = [];
+    if (!Array.isArray(state.accounts)) state.accounts = deepCopy(Core.DEFAULT_ACCOUNTS);
+    if (!Array.isArray(state.categories)) state.categories = deepCopy(Core.DEFAULT_CATEGORIES);
+    if (!Array.isArray(state.recurrings)) state.recurrings = [];
+    if (!Array.isArray(state.trash)) state.trash = [];
+    if (!state.budgets || typeof state.budgets !== 'object' || Array.isArray(state.budgets)) state.budgets = {};
+    if (!state.settings || typeof state.settings !== 'object' || Array.isArray(state.settings)) state.settings = { currency: '¥' };
+    if (typeof state.settings.currency !== 'string' || !state.settings.currency || state.settings.currency.length > 8 || /[<>&"']/.test(state.settings.currency)) {
+      state.settings.currency = '¥';
+    }
+    if (state.settings.theme != null && !['auto', 'light', 'dark'].includes(state.settings.theme)) {
+      state.settings.theme = 'auto';
+    }
+    const clean = Core.sanitizeLoadedData(state.transactions, state.accounts, state.categories);
+    state.transactions = clean.transactions;
+    state.accounts = clean.accounts;
+    state.categories = clean.categories;
+    const seenIds = new Set(state.transactions.map(t => t.id));
+    state.trash = state.trash.filter(t => {
+      if (!t || typeof t !== 'object' || Array.isArray(t) || !Core.safeId(t.id) || seenIds.has(t.id)) return false;
+      if (!Core.validateTransaction(t, state.categories, state.accounts).ok) return false;
+      seenIds.add(t.id);
+      return true;
+    });
+    return clean.dropped.transactions + clean.dropped.categories + clean.dropped.accounts;
+  }
+
   function init() {
     const bs = Core.createBrowserStorage();
     state.available = bs.available;
@@ -224,20 +296,9 @@
     state.budgets = recover(k.budgets, {});
     state.settings = recover(k.settings, { currency: '¥' });
     state.recurrings = recover(k.recurrings, []);
-    if (!Array.isArray(state.transactions)) state.transactions = [];
-    if (!Array.isArray(state.accounts)) { state.accounts = deepCopy(Core.DEFAULT_ACCOUNTS); }
-    if (!Array.isArray(state.categories)) { state.categories = deepCopy(Core.DEFAULT_CATEGORIES); }
-    if (!Array.isArray(state.recurrings)) state.recurrings = [];
-    if (!Array.isArray(state.trash)) state.trash = [];
-    if (!state.budgets || typeof state.budgets !== 'object' || Array.isArray(state.budgets)) state.budgets = {};
-    if (!state.settings || typeof state.settings !== 'object' || Array.isArray(state.settings)) state.settings = { currency: '¥' };
+    state.trash = recover(k.trash, []);
 
-    const clean = Core.sanitizeLoadedData(state.transactions, state.accounts, state.categories);
-    const droppedTotal = clean.dropped.transactions + clean.dropped.categories + clean.dropped.accounts;
-    state.transactions = clean.transactions;
-    state.accounts = clean.accounts;
-    state.categories = clean.categories;
-    state.trash = state.trash.filter(t => t && typeof t === 'object' && Core.validateTransaction(t, state.categories, state.accounts).ok);
+    const droppedTotal = sanitizeState();
 
     const gen = Core.generateDueRecurrings(state.recurrings, Core.todayStr(), state.categories, state.accounts);
     state.recurrings = gen.recurrings;
@@ -255,8 +316,25 @@
         else if (action === 'import-csv') onImportClick('csv');
       });
     }
-    if (location.search.indexOf('selftest=1') >= 0) {
-      window.__bkTest = { state, render, renderTxList };
+    if (location.search.indexOf('selftest=1') >= 0 || location.search.indexOf('testhooks=1') >= 0) {
+      window.__bkTest = {
+        state, render, renderTxList,
+        evalAmountExpr, parseAmountInput,
+        handleImportJsonText, reloadFromStorage,
+        onDeleteTx, onClearData, decodeCsvBytes,
+        txItemHtml, onTxSubmit,
+        runPendingConfirm: () => {
+          const cb = pendingConfirm;
+          pendingConfirm = null;
+          if (cb) cb();
+        },
+        triggerToastAction: () => {
+          const a = toastAction;
+          toastAction = null;
+          if (a && a.cb) a.cb();
+        },
+        hasToastAction: () => !!toastAction,
+      };
     }
     const tabMatch = location.search.match(/[?&]tab=(\w+)/);
     if (tabMatch && ['detail', 'stats', 'budget', 'manage'].includes(tabMatch[1])) state.tab = tabMatch[1];
@@ -280,8 +358,14 @@
   let toastTimer = null;
   let toastAction = null;
   let errorMuteUntil = 0;
+  function clearToastAction() {
+    toastAction = null;
+    clearTimeout(toastTimer);
+    const el = $('#toast');
+    if (el) el.classList.add('hidden');
+  }
   function toast(msg, isError, action) {
-    if (!isError && Date.now() < errorMuteUntil) return;
+    if (!isError && !action && Date.now() < errorMuteUntil) return;
     if (isError) errorMuteUntil = Date.now() + 3000;
     const el = $('#toast');
     toastAction = action || null;
@@ -343,12 +427,14 @@
   function reloadFromStorage() {
     const k = state.storage.keys;
     state.transactions = state.storage.load(k.transactions, []);
-    state.accounts = state.storage.load(k.accounts, null) || deepCopy(Core.DEFAULT_ACCOUNTS);
-    state.categories = state.storage.load(k.categories, null) || deepCopy(Core.DEFAULT_CATEGORIES);
+    state.accounts = state.storage.load(k.accounts, null);
+    state.categories = state.storage.load(k.categories, null);
     state.budgets = state.storage.load(k.budgets, {});
     state.settings = state.storage.load(k.settings, { currency: '¥' });
     state.recurrings = state.storage.load(k.recurrings, []);
     state.trash = state.storage.load(k.trash, []);
+    sanitizeState();
+    clearToastAction();
     applyTheme();
     render();
   }
@@ -399,7 +485,7 @@
     const cat = Core.findCategory(state.categories, t.categoryId);
     const kw = state.filter.keyword;
     const icon = t.type === 'transfer' ? '🔁' : (cat ? cat.icon : '❓');
-    const tint = t.type === 'transfer' ? 'transfer' : catColor(t.categoryId);
+    const iconBg = t.type === 'transfer' ? 'var(--transfer-light)' : (catColor(t.categoryId) + '1f');
     const badge = t.recurringId ? ' <span title="周期记账自动生成">🔄</span>' : '';
     const tagText = (t.tags && t.tags.length) ? ' ' + t.tags.map(x => '#' + x).join(' ') : '';
     let title, cls, sign, line;
@@ -416,7 +502,7 @@
       line = [sub ? sub.name : '', accountName(t.accountId), t.note].filter(Boolean).join(' · ');
     }
     return `<div class="tx-item" role="button" tabindex="0" aria-label="${esc(title + ' ' + sign + yuan(t.amount))}" data-action="edit-tx" data-id="${esc(t.id)}">
-      <div class="tx-icon" style="background:${esc(tint)}1f">${esc(icon)}</div>
+      <div class="tx-icon" style="background:${esc(iconBg)}">${esc(icon)}</div>
       <div class="tx-main">
         <div class="tx-cat">${hi(title, kw)}${badge}</div>
         <div class="tx-sub-note">${hi(line, kw)}<span class="tx-tags">${hi(tagText, kw)}</span></div>
@@ -540,12 +626,15 @@
         <input data-filter="keyword" type="text" placeholder="搜索备注 / 分类" value="${esc(f.keyword)}">
         </div>
       </div>
-      ${state.detailView === 'calendar' ? calendarHtml() : '<div id="tx-list"></div>'}`;
+      ${state.detailView === 'calendar' ? '<div id="cal-container">' + calendarHtml() + '</div>' : '<div id="tx-list"></div>'}`;
     if (state.detailView === 'list') renderTxList();
   }
 
   function calendarHtml() {
-    const days = Core.dailyInOut(state.transactions, state.monthKey);
+    const filterNoDay = Object.assign({ monthKey: state.monthKey }, activeFilter());
+    delete filterNoDay.day;
+    const filteredMonth = Core.filterTransactions(state.transactions, filterNoDay, state.categories);
+    const days = Core.dailyInOut(filteredMonth, state.monthKey);
     const [y, m] = state.monthKey.split('-').map(Number);
     const firstWeekday = (new Date(y, m - 1, 1).getDay() + 6) % 7;
     const today = Core.todayStr();
@@ -727,8 +816,9 @@
     const type = state.formType;
     const amount = parseAmountInput($('#tx-amount').value);
     const rawTags = $('#tx-tags').value.split(/[,，、]/).map(s => s.trim()).filter(Boolean);
-    const tags = Array.from(new Set(rawTags)).slice(0, 5);
-    const tagsTruncated = rawTags.filter(Boolean).length !== tags.length;
+    const uniqueTags = Array.from(new Set(rawTags));
+    const tags = uniqueTags.slice(0, 5);
+    const tagsTruncated = uniqueTags.length > 5;
     const t = Object.assign({
       id: editingId || Core.genId('tx'),
       type,
@@ -770,9 +860,26 @@
       hideModal('#tx-modal');
       render();
       toast('已移入回收站', false, { label: '撤销', cb() {
-        const i = state.trash.findIndex(x => x.id === removed.id);
-        if (i >= 0) state.trash.splice(i, 1);
-        state.transactions.push(removed);
+        const i = state.trash.findIndex(x => x && x.id === removed.id);
+        if (i < 0) {
+          toast('该记录已无法撤销（可能已恢复或被彻底删除）', true);
+          return;
+        }
+        if (state.transactions.some(x => x && x.id === removed.id)) {
+          state.trash.splice(i, 1);
+          saveKey('trash');
+          render();
+          toast('记录已在明细中');
+          return;
+        }
+        const item = Object.assign({}, state.trash[i]);
+        delete item.deletedAt;
+        if (!Core.validateTransaction(item, state.categories, state.accounts).ok) {
+          toast('关联账户或分类已变更，无法撤销恢复', true);
+          return;
+        }
+        state.trash.splice(i, 1);
+        state.transactions.push(item);
         saveKey('trash');
         saveKey('transactions');
         render();
@@ -1512,13 +1619,28 @@
     reader.readAsText(file);
   }
 
+  function decodeCsvBytes(buf) {
+    const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch (e) {
+      return new TextDecoder('gb18030').decode(bytes);
+    }
+  }
+
   function onImportCsvFile(file) {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) { toast('文件超过 10MB，请确认选择的是本应用的明细文件', true); return; }
     const reader = new FileReader();
     reader.onerror = () => toast('文件读取失败', true);
-    reader.onload = () => handleImportCsvText(reader.result);
-    reader.readAsText(file, 'UTF-8');
+    reader.onload = () => {
+      try {
+        handleImportCsvText(decodeCsvBytes(reader.result));
+      } catch (e) {
+        toast('CSV 文件编码无法识别', true);
+      }
+    };
+    reader.readAsArrayBuffer(file);
   }
 
   function handleImportJsonText(text) {
@@ -1529,11 +1651,12 @@
     if (!v.ok) { toast('导入失败：' + v.errors.join('；'), true); return; }
     askConfirm(`导入将覆盖当前全部数据（共 ${v.data.transactions.length} 笔交易），确定继续？`, () => {
       closeAllModals();
+      clearToastAction();
       const prev = {
         transactions: state.transactions, accounts: state.accounts, categories: state.categories,
         budgets: state.budgets, settings: state.settings, recurrings: state.recurrings,
+        trash: state.trash,
       };
-      closeModal();
       state.transactions = v.data.transactions;
       state.accounts = v.data.accounts;
       state.categories = v.data.categories;
@@ -1660,6 +1783,7 @@
     askConfirm('将删除全部数据且无法恢复，确定清空吗？', () => {
       askConfirm('再次确认：真的要清空全部数据吗？', () => {
         closeAllModals();
+        clearToastAction();
         state.storage.clear();
         state.transactions = [];
         state.accounts = deepCopy(Core.DEFAULT_ACCOUNTS);
@@ -1780,10 +1904,22 @@
           break;
         }
         case 'restore-trash': {
-          const i = state.trash.findIndex(x => x.id === act.dataset.id);
+          const i = state.trash.findIndex(x => x && x.id === act.dataset.id);
           if (i >= 0) {
-            const item = state.trash.splice(i, 1)[0];
+            if (state.transactions.some(x => x && x.id === act.dataset.id)) {
+              state.trash.splice(i, 1);
+              saveKey('trash');
+              render();
+              toast('记录已在明细中');
+              break;
+            }
+            const item = Object.assign({}, state.trash[i]);
             delete item.deletedAt;
+            if (!Core.validateTransaction(item, state.categories, state.accounts).ok) {
+              toast('关联账户或分类已变更，无法恢复', true);
+              break;
+            }
+            state.trash.splice(i, 1);
             state.transactions.push(item);
             saveKey('trash');
             saveKey('transactions');
@@ -1883,7 +2019,14 @@
       if (e.target.dataset && e.target.dataset.filter === 'keyword') {
         state.filter.keyword = e.target.value;
         clearTimeout(keywordTimer);
-        keywordTimer = setTimeout(renderTxList, 120);
+        keywordTimer = setTimeout(() => {
+          if (state.detailView === 'calendar') {
+            const calEl = $('#cal-container');
+            if (calEl) calEl.innerHTML = calendarHtml();
+          } else {
+            renderTxList();
+          }
+        }, 120);
       }
     });
     document.addEventListener('keydown', e => {

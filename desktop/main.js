@@ -1,7 +1,39 @@
 'use strict';
-const { app, BrowserWindow, Menu, dialog, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const { pathToFileURL } = require('url');
+const { TextDecoder } = require('util');
+
+const INDEX_HTML_PATH = path.resolve(__dirname, '..', 'index.html');
+const INDEX_HTML_URL = pathToFileURL(INDEX_HTML_PATH).href;
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+const MAX_EXPORT_BYTES = 20 * 1024 * 1024;
+
+function isTrustedSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const frame = event && event.senderFrame;
+  if (!frame || frame !== mainWindow.webContents.mainFrame) return false;
+  try {
+    const u = new URL(frame.url);
+    if (u.protocol !== 'file:') return false;
+    const expected = new URL(INDEX_HTML_URL);
+    return process.platform === 'win32'
+      ? u.pathname.toLowerCase() === expected.pathname.toLowerCase()
+      : u.pathname === expected.pathname;
+  } catch (e) {
+    return false;
+  }
+}
+
+function decodeCsvBuffer(buf) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch (e) {
+    return new TextDecoder('gb18030').decode(buf);
+  }
+}
 
 const isSelfcheck = process.argv.includes('--selfcheck');
 if (isSelfcheck) {
@@ -109,15 +141,18 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
       spellcheck: false,
     },
   });
   if (windowState.maximized) mainWindow.maximize();
-  mainWindow.loadFile(path.join(__dirname, '..', 'index.html'),
+  mainWindow.loadFile(INDEX_HTML_PATH,
     isSelfcheck ? { search: 'selftest=1&tab=detail' } : undefined);
   mainWindow.on('close', saveWindowState);
   mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.webContents.on('will-navigate', e => e.preventDefault());
+  mainWindow.webContents.on('will-redirect', e => e.preventDefault());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('unresponsive', async () => {
     try {
@@ -161,9 +196,13 @@ function registerIpc() {
   ipcMain.handle('desktop:export-file', async (event, payload) => {
     let tmpPath = null;
     try {
+      if (!isTrustedSender(event)) return { ok: false, error: '非法调用来源' };
       const p = payload || {};
       if (typeof p.content !== 'string' || typeof p.defaultName !== 'string') {
         return { ok: false, error: '参数不完整' };
+      }
+      if (Buffer.byteLength(p.content, 'utf8') > MAX_EXPORT_BYTES) {
+        return { ok: false, error: '导出内容超过 20MB 上限' };
       }
       const name = path.basename(p.defaultName);
       const ext = path.extname(name).toLowerCase();
@@ -174,18 +213,21 @@ function registerIpc() {
       const r = await dialog.showSaveDialog(mainWindow, { defaultPath: name, filters });
       if (r.canceled || !r.filePath) return { ok: false, canceled: true };
       if (!/\.(json|csv)$/i.test(r.filePath)) return { ok: false, error: '文件扩展名必须是 .json 或 .csv' };
-      tmpPath = r.filePath + '.tmp';
-      fs.writeFileSync(tmpPath, p.content, 'utf8');
-      fs.renameSync(tmpPath, r.filePath);
+      tmpPath = r.filePath + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+      await fs.promises.writeFile(tmpPath, p.content, { encoding: 'utf8', flag: 'wx' });
+      await fs.promises.rename(tmpPath, r.filePath);
       tmpPath = null;
       return { ok: true, path: r.filePath };
     } catch (err) {
-      try { if (tmpPath) fs.unlinkSync(tmpPath); } catch (e) { /* 清理失败忽略 */ }
+      if (tmpPath) {
+        try { await fs.promises.unlink(tmpPath); } catch (e) { /* 清理失败忽略 */ }
+      }
       return { ok: false, error: friendlyFsError(err) };
     }
   });
   ipcMain.handle('desktop:import-file', async (event, payload) => {
     try {
+      if (!isTrustedSender(event)) return { ok: false, error: '非法调用来源' };
       const p = payload || {};
       const kind = p.kind === 'csv' ? 'csv' : 'json';
       const filters = [kind === 'csv'
@@ -195,8 +237,9 @@ function registerIpc() {
       if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
       const filePath = r.filePaths[0];
       const stat = await fs.promises.stat(filePath);
-      if (stat.size > 10 * 1024 * 1024) return { ok: false, error: '文件超过 10MB，请确认选择的是本应用的备份或明细文件' };
-      const content = await fs.promises.readFile(filePath, 'utf8');
+      if (stat.size > MAX_IMPORT_BYTES) return { ok: false, error: '文件超过 10MB，请确认选择的是本应用的备份或明细文件' };
+      const buf = await fs.promises.readFile(filePath);
+      const content = kind === 'csv' ? decodeCsvBuffer(buf) : buf.toString('utf8');
       return { ok: true, path: filePath, content };
     } catch (err) {
       return { ok: false, error: friendlyFsError(err) };
@@ -275,6 +318,12 @@ if (!gotLock) {
     try { dialog.showErrorBox('发生未处理的错误', String((err && err.stack) || err)); } catch (e) { /* 已无法弹窗 */ }
   });
   app.whenReady().then(() => {
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      callback(false);
+    });
+    if (typeof session.defaultSession.setPermissionCheckHandler === 'function') {
+      session.defaultSession.setPermissionCheckHandler(() => false);
+    }
     loadWindowState();
     registerIpc();
     if (!isSelfcheck) buildMenu();

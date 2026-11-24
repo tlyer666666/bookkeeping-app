@@ -879,6 +879,293 @@ test('detectBillKind：识别支付宝新版标题', () => {
   assert.strictEqual(core.detectBillKind('支付宝交易明细\n交易时间,交易分类'), 'alipay');
 });
 
+/* ---------- 审计回归测试 ---------- */
+
+test('validateTransaction：accounts 含 null/非对象不崩溃且拒绝不安全整数金额', () => {
+  const cats = core.DEFAULT_CATEGORIES;
+  const dirtyAccs = [null, undefined, 'bad', 123, { id: 'acc_cash', name: '现金', icon: '💰', initialBalance: 0 }];
+  assert.strictEqual(core.validateTransaction(tx({ categoryId: 'e1' }), cats, dirtyAccs).ok, true);
+  assert.strictEqual(core.validateTransaction(tx({ categoryId: 'e1', accountId: 'acc_missing' }), cats, dirtyAccs).ok, false);
+  assert.strictEqual(core.validateTransaction(tx({ categoryId: 'e1' }), cats, null).ok, false);
+  assert.strictEqual(core.validateTransaction(tx({ categoryId: 'e1', amount: Number.MAX_SAFE_INTEGER + 1 }), cats, dirtyAccs).ok, false);
+  assert.strictEqual(core.validateTransaction(tx({ categoryId: 'e1', amount: core.MAX_FEN + 1 }), cats, dirtyAccs).ok, false);
+  assert.strictEqual(core.validateTransaction(tx({ categoryId: 'e1', amount: core.MAX_FEN }), cats, dirtyAccs).ok, true);
+});
+
+test('validateImport：先校验 accounts/categories（防 null 崩溃、非字符串 name/icon）、安全整数上限、recurrings 去重与禁止自转账', () => {
+  const base = () => ({
+    version: 1, exportedAt: 'x',
+    data: {
+      transactions: [tx({ id: 't1', categoryId: 'e1', accountId: 'acc_cash' })],
+      accounts: [
+        { id: 'acc_cash', name: '现金', icon: '💰', initialBalance: 0 },
+        { id: 'acc_bank', name: '银行卡', icon: '🏦', initialBalance: 0 },
+      ],
+      categories: [{ id: 'e1', type: 'expense', name: '餐饮', icon: '🍜', subs: [{ id: 'e1s1', name: '早餐' }] }],
+      budgets: {}, settings: {},
+    },
+  });
+  assert.strictEqual(core.validateImport(base()).ok, true);
+
+  // accounts 含 null 不能崩溃
+  const nullAcc = base();
+  nullAcc.data.accounts.unshift(null);
+  assert.strictEqual(core.validateImport(nullAcc).ok, false, 'accounts 含 null 应平稳拒绝');
+
+  // categories 含 null 不能崩溃
+  const nullCat = base();
+  nullCat.data.categories.unshift(null);
+  assert.strictEqual(core.validateImport(nullCat).ok, false, 'categories 含 null 应平稳拒绝');
+
+  // name/icon 非字符串应拒绝（防 { length: 5 } 绕过）
+  const badAccName = base();
+  badAccName.data.accounts[0].name = { length: 5 };
+  assert.strictEqual(core.validateImport(badAccName).ok, false, '账户 name 非字符串应拒绝');
+  const badAccIcon = base();
+  badAccIcon.data.accounts[0].icon = 123;
+  assert.strictEqual(core.validateImport(badAccIcon).ok, false, '账户 icon 非字符串应拒绝');
+  const badCatName = base();
+  badCatName.data.categories[0].name = ['餐饮'];
+  assert.strictEqual(core.validateImport(badCatName).ok, false, '分类 name 非字符串应拒绝');
+  const badSubName = base();
+  badSubName.data.categories[0].subs[0].name = 999;
+  assert.strictEqual(core.validateImport(badSubName).ok, false, '子分类 name 非字符串应拒绝');
+
+  // 超出安全整数/合理上限的金额应拒绝
+  const hugeInit = base();
+  hugeInit.data.accounts[0].initialBalance = Number.MAX_SAFE_INTEGER + 1;
+  assert.strictEqual(core.validateImport(hugeInit).ok, false, 'initialBalance 超出安全整数应拒绝');
+  const hugeBudget = base();
+  hugeBudget.data.budgets['2026-10'] = { total: core.MAX_FEN + 1, byCategory: {} };
+  assert.strictEqual(core.validateImport(hugeBudget).ok, false, 'budget 超上限应拒绝');
+  const hugeRec = base();
+  hugeRec.data.recurrings = [{ id: 'rc1', type: 'expense', amount: Number.MAX_SAFE_INTEGER + 1, categoryId: 'e1', subcategoryId: null, accountId: 'acc_cash', toAccountId: null, note: '', tags: [], frequency: 'monthly', nextDate: '2026-11-01' }];
+  assert.strictEqual(core.validateImport(hugeRec).ok, false, 'recurring 金额超安全整数应拒绝');
+
+  // recurrings ID 重复应拒绝
+  const dupRec = base();
+  dupRec.data.recurrings = [
+    { id: 'rc_dup', type: 'expense', amount: 100, categoryId: 'e1', subcategoryId: null, accountId: 'acc_cash', toAccountId: null, note: '', tags: [], frequency: 'monthly', nextDate: '2026-11-01' },
+    { id: 'rc_dup', type: 'expense', amount: 200, categoryId: 'e1', subcategoryId: null, accountId: 'acc_cash', toAccountId: null, note: '', tags: [], frequency: 'monthly', nextDate: '2026-11-02' },
+  ];
+  assert.strictEqual(core.validateImport(dupRec).ok, false, 'recurrings 重复 ID 应拒绝');
+
+  // recurrings 禁止同账户自转账
+  const selfTransfer = base();
+  selfTransfer.data.recurrings = [{ id: 'rc_self', type: 'transfer', amount: 500, categoryId: null, subcategoryId: null, accountId: 'acc_cash', toAccountId: 'acc_cash', note: '', tags: [], frequency: 'monthly', nextDate: '2026-11-01' }];
+  assert.strictEqual(core.validateImport(selfTransfer).ok, false, 'recurrings 自转账应拒绝');
+});
+
+function loadAppInVm(initialStore, opts) {
+  const fs = require('fs');
+  const path = require('path');
+  const vm = require('vm');
+  const { TextDecoder } = require('util');
+  const store = Object.assign({}, initialStore || {});
+  let failSaveKeys = (opts && opts.failSaveKeys) || null;
+  const localStorage = {
+    getItem: k => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
+    setItem: (k, v) => {
+      if (failSaveKeys && failSaveKeys.has(k)) throw new Error('QuotaExceededError');
+      store[k] = String(v);
+    },
+    removeItem: k => { delete store[k]; },
+  };
+  const elements = new Map();
+  function makeEl(id) {
+    const classes = new Set();
+    return {
+      id,
+      value: '',
+      textContent: '',
+      innerHTML: '',
+      title: '',
+      dataset: {},
+      isConnected: true,
+      classList: {
+        add(...cs) { cs.forEach(c => classes.add(c)); },
+        remove(...cs) { cs.forEach(c => classes.delete(c)); },
+        toggle(c, force) {
+          if (force === undefined) { if (classes.has(c)) classes.delete(c); else classes.add(c); }
+          else if (force) classes.add(c);
+          else classes.delete(c);
+        },
+        contains(c) { return classes.has(c); },
+      },
+      focus() {},
+      select() {},
+      addEventListener() {},
+      setSelectionRange() {},
+    };
+  }
+  const document = {
+    activeElement: null,
+    documentElement: { dataset: {} },
+    querySelector(sel) {
+      if (!elements.has(sel)) elements.set(sel, makeEl(sel));
+      return elements.get(sel);
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  const sandbox = {
+    document,
+    location: { protocol: 'http:', search: '?testhooks=1', reload() {} },
+    navigator: {},
+    localStorage,
+    TextDecoder,
+    Uint8Array,
+    BigInt,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    console,
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    Event: function Event(type) { this.type = type; },
+    addEventListener() {},
+    scrollTo() {},
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  const ctx = vm.createContext(sandbox);
+  const coreCode = fs.readFileSync(path.join(__dirname, '..', 'core.js'), 'utf8');
+  vm.runInContext(coreCode, ctx, { filename: 'core.js' });
+  const appCode = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  vm.runInContext(appCode, ctx, { filename: 'app.js' });
+  return {
+    bk: sandbox.__bkTest,
+    store,
+    document,
+    setFailSaveKeys(set) { failSaveKeys = set; },
+  };
+}
+
+test('app.js init()：启动时恢复回收站且不清空 bk.trash', () => {
+  const trashTx = tx({ id: 'tx_trash_1', categoryId: 'e1', accountId: 'acc_cash', amount: 1234 });
+  const initial = {
+    'bk.transactions': JSON.stringify([]),
+    'bk.accounts': JSON.stringify(core.DEFAULT_ACCOUNTS),
+    'bk.categories': JSON.stringify(core.DEFAULT_CATEGORIES),
+    'bk.budgets': JSON.stringify({}),
+    'bk.settings': JSON.stringify({ currency: '¥' }),
+    'bk.recurrings': JSON.stringify([]),
+    'bk.trash': JSON.stringify([Object.assign({ deletedAt: '2026-10-02T09:00:00.000Z' }, trashTx)]),
+  };
+  const env = loadAppInVm(initial);
+  assert.strictEqual(env.bk.state.trash.length, 1, 'state.trash 应从存储恢复');
+  assert.strictEqual(env.bk.state.trash[0].id, 'tx_trash_1');
+  const persistedTrash = JSON.parse(env.store['bk.trash']);
+  assert.strictEqual(persistedTrash.length, 1, 'saveAll() 不应清空 bk.trash');
+  assert.strictEqual(persistedTrash[0].id, 'tx_trash_1');
+});
+
+test('app.js handleImportJsonText()：写入失败回滚时保留 state.trash（不为 undefined）', () => {
+  const trashTx = tx({ id: 'tx_keep_trash', categoryId: 'e1', accountId: 'acc_cash', amount: 500 });
+  const initial = {
+    'bk.transactions': JSON.stringify([]),
+    'bk.accounts': JSON.stringify(core.DEFAULT_ACCOUNTS),
+    'bk.categories': JSON.stringify(core.DEFAULT_CATEGORIES),
+    'bk.budgets': JSON.stringify({}),
+    'bk.settings': JSON.stringify({ currency: '¥' }),
+    'bk.recurrings': JSON.stringify([]),
+    'bk.trash': JSON.stringify([trashTx]),
+  };
+  const env = loadAppInVm(initial);
+  assert.strictEqual(env.bk.state.trash.length, 1);
+
+  const importPayload = JSON.stringify({
+    version: 1, exportedAt: '2026-10-02T00:00:00.000Z',
+    data: {
+      transactions: [tx({ id: 'tx_new', categoryId: 'e1', accountId: 'acc_cash', amount: 999 })],
+      accounts: core.DEFAULT_ACCOUNTS,
+      categories: core.DEFAULT_CATEGORIES,
+      budgets: {}, settings: { currency: '¥' }, recurrings: [], trash: [],
+    },
+  });
+  // 让 bk.budgets 写入失败，触发 saveAll() 回滚
+  env.setFailSaveKeys(new Set(['bk.budgets']));
+  env.bk.handleImportJsonText(importPayload);
+  env.bk.runPendingConfirm();
+  assert.ok(Array.isArray(env.bk.state.trash), '回滚后 state.trash 必须仍是数组而非 undefined');
+  assert.strictEqual(env.bk.state.trash.length, 1);
+  assert.strictEqual(env.bk.state.trash[0].id, 'tx_keep_trash');
+});
+
+test('app.js evalAmountExpr()：BigInt 精确有理数运算与一元 + 支持', () => {
+  const env = loadAppInVm();
+  assert.strictEqual(env.bk.evalAmountExpr('1.005 + 0'), 101, '1.005 + 0 精确远离零四舍五入为 101 分');
+  assert.strictEqual(env.bk.parseAmountInput('1.005 + 0'), 101);
+  assert.strictEqual(env.bk.evalAmountExpr('0.1 + 0.2'), 30);
+  assert.strictEqual(env.bk.evalAmountExpr('10 / 3 * 3'), 1000);
+  assert.strictEqual(env.bk.evalAmountExpr('+5 + +2.5'), 750, '支持一元 +');
+  assert.strictEqual(env.bk.evalAmountExpr('-(-1.005)'), 101);
+  assert.strictEqual(env.bk.evalAmountExpr('19.99 * 3'), 5997);
+  assert.throws(() => env.bk.evalAmountExpr('1 / 0'));
+  assert.strictEqual(env.bk.parseAmountInput('1 / 0'), null);
+  assert.strictEqual(env.bk.parseAmountInput('1 - 5'), null);
+});
+
+test('app.js Toast 撤销竞态、GB18030 CSV 解码、reloadFromStorage 清洗与转账样式', () => {
+  const t1 = tx({ id: 'tx_undo_1', categoryId: 'e1', accountId: 'acc_cash', amount: 880 });
+  const env = loadAppInVm({
+    'bk.transactions': JSON.stringify([t1]),
+    'bk.accounts': JSON.stringify(core.DEFAULT_ACCOUNTS),
+    'bk.categories': JSON.stringify(core.DEFAULT_CATEGORIES),
+    'bk.budgets': JSON.stringify({}),
+    'bk.settings': JSON.stringify({ currency: '¥' }),
+    'bk.recurrings': JSON.stringify([]),
+    'bk.trash': JSON.stringify([]),
+  });
+  // 删除记录进入回收站，清空回收站后再点 Toast 撤销，不应复活记录
+  env.bk.state.editingId = 'tx_undo_1';
+  env.bk.onDeleteTx();
+  env.bk.runPendingConfirm();
+  assert.strictEqual(env.bk.state.transactions.length, 0);
+  assert.strictEqual(env.bk.state.trash.length, 1);
+  assert.strictEqual(env.bk.hasToastAction(), true);
+  env.bk.state.trash = [];
+  env.bk.triggerToastAction();
+  assert.strictEqual(env.bk.state.transactions.length, 0, '回收站已清空时撤销不应复活记录');
+
+  // GB18030 解码（"支付宝" 的 GB18030 字节）
+  const gbkBytes = new Uint8Array([0xd6, 0xa7, 0xb8, 0xb6, 0xb1, 0xa6]);
+  assert.strictEqual(env.bk.decodeCsvBytes(gbkBytes), '支付宝');
+  const utf8Bytes = new Uint8Array(Buffer.from('微信支付', 'utf8'));
+  assert.strictEqual(env.bk.decodeCsvBytes(utf8Bytes), '微信支付');
+
+  // reloadFromStorage 应清洗脏数据
+  env.store['bk.transactions'] = JSON.stringify([null, { id: 'bad', amount: -5 }, t1]);
+  env.bk.reloadFromStorage();
+  assert.deepStrictEqual(Array.from(env.bk.state.transactions, t => t.id), ['tx_undo_1']);
+
+  // 清空数据时应清除残留的 toastAction
+  env.bk.state.editingId = 'tx_undo_1';
+  env.bk.onDeleteTx();
+  env.bk.runPendingConfirm();
+  assert.strictEqual(env.bk.hasToastAction(), true);
+  env.bk.onClearData();
+  env.bk.runPendingConfirm();
+  env.bk.runPendingConfirm();
+  assert.strictEqual(env.bk.hasToastAction(), false, '清空数据后 toastAction 必须被清除');
+
+  // 转账行不应输出无效样式 background:transfer1f
+  const html = env.bk.txItemHtml(tx({ id: 'tx_tr', type: 'transfer', accountId: 'acc_cash', toAccountId: 'acc_bank' }));
+  assert.ok(!html.includes('background:transfer1f'), '不应包含无效 CSS background:transfer1f');
+  assert.ok(html.includes('background:var(--transfer-light)'));
+
+  // 重复标签不误报“超出 5 个”
+  env.bk.state.editingId = null;
+  env.bk.state.formType = 'expense';
+  env.document.querySelector('#tx-amount').value = '10';
+  env.document.querySelector('#tx-date').value = '2026-10-02';
+  env.document.querySelector('#tx-note').value = '';
+  env.document.querySelector('#tx-tags').value = '重复, 标签2, 重复';
+  env.document.querySelector('#tx-account').value = 'acc_cash';
+  env.document.querySelector('#tx-cat').value = 'e1';
+  env.document.querySelector('#tx-sub').value = '';
+  env.bk.onTxSubmit({ preventDefault() {} });
+  assert.ok(!env.document.querySelector('#toast').innerHTML.includes('超出 5 个'), '重复标签不足 5 个唯一值不应误报');
+});
+
 /* ---------- run ---------- */
 
 (async () => {

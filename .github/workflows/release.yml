@@ -22,19 +22,46 @@ jobs:
         run: |
           node --check core.js
           node --check app.js
+          node --check server.js
+          node --check desktop/main.js
       - name: 单元测试
         run: node tests/core.test.js
       - name: 生成图标
         run: |
           node tools/make-icons.js
           node tools/make-ico.js
-      - name: 打包 Windows exe
+      - name: 打包 Windows 应用目录
         run: node tools/dist.js
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      - name: 打包完整 ZIP 与 SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $pkgDir = Get-ChildItem -Path release -Directory | Select-Object -First 1
+          if (-not $pkgDir) { throw '未找到打包输出目录' }
+          if (-not (Test-Path (Join-Path $pkgDir.FullName 'resources\app.asar'))) {
+            throw '打包目录缺少 resources/app.asar'
+          }
+          $baseName = "Bookkeeping-v$version-win64"
+          $stagedDir = Join-Path 'release' $baseName
+          if ($pkgDir.Name -ne $baseName) {
+            if (Test-Path $stagedDir) { Remove-Item -Recurse -Force $stagedDir }
+            Rename-Item -LiteralPath $pkgDir.FullName -NewName $baseName
+          }
+          $zipName = "$baseName.zip"
+          $zipPath = Join-Path 'release' $zipName
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          Compress-Archive -LiteralPath $stagedDir -DestinationPath $zipPath -CompressionLevel Optimal
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sumsPath = Join-Path (Resolve-Path 'release').Path 'SHA256SUMS.txt'
+          [System.IO.File]::WriteAllText($sumsPath, "$hash  $zipName`n", [System.Text.UTF8Encoding]::new($false))
       - name: 上传到 Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/**/*.exe
+          files: |
+            release/*.zip
+            release/SHA256SUMS.txt
           fail_on_unmatched_files: true
           overwrite_files: true

@@ -2,9 +2,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.resolve('.');
+const ROOT = path.resolve(__dirname, '..');
 const ALLOWED = new Set(['启动桌面版.bat', '启动服务器.bat']);
-if (path.basename(ROOT) !== '记账管理系统') { console.error('请在项目根目录运行'); process.exit(1); }
+if (!fs.existsSync(path.join(ROOT, 'package.json'))) { console.error('未找到 package.json，请在项目根目录运行'); process.exit(1); }
 for (const name of ALLOWED) {
   const file = path.join(ROOT, name);
   if (!file.startsWith(ROOT + path.sep)) { console.error('输出越出项目根目录'); process.exit(1); }

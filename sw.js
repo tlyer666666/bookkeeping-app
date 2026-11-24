@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'bk-cache-v7';
+const CACHE = 'bk-cache-v8';
 const ASSETS = [
   './',
   'index.html',
@@ -11,20 +11,21 @@ const ASSETS = [
   'icons/icon-512.png',
 ];
 
+function scopeBase() {
+  return (self.registration && self.registration.scope) || (self.location.origin + '/');
+}
+
 self.addEventListener('install', e => {
+  const base = scopeBase();
   e.waitUntil(
     caches.open(CACHE).then(c =>
-      Promise.allSettled(ASSETS.map(a => {
-        const url = new URL(a, self.location.origin).href;
+      Promise.all(ASSETS.map(a => {
+        const url = new URL(a, base).href;
         return fetch(url, { cache: 'reload' }).then(resp => {
           if (!resp.ok) throw new Error(a + ' -> ' + resp.status);
-          return c.put(a, resp);
+          return c.put(url, resp);
         });
-      })).then(results => {
-        const failed = results.filter(r => r.status === 'rejected');
-        if (failed.length) console.warn('[SW] 预缓存部分失败:', failed.map(f => String(f.reason)));
-        return self.skipWaiting();
-      })
+      })).then(() => self.skipWaiting())
     )
   );
 });
@@ -41,11 +42,13 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
+  const base = scopeBase();
   const cacheable = ASSETS.some(a => {
     const clean = a === './' ? 'index.html' : a;
-    return url.pathname === new URL(clean, self.location.origin).pathname;
+    return url.pathname === new URL(clean, base).pathname || (a === './' && url.pathname === new URL('./', base).pathname);
   });
   const isNavigate = e.request.mode === 'navigate';
+  const fallbackIndex = new URL('index.html', base).href;
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then(hit =>
       hit || fetch(e.request).then(resp => {
@@ -54,7 +57,7 @@ self.addEventListener('fetch', e => {
           caches.open(CACHE).then(c => c.put(e.request, copy));
         }
         return resp;
-      }).catch(() => (isNavigate ? caches.match('index.html') : undefined))
+      }).catch(() => (isNavigate ? caches.match(fallbackIndex) : undefined))
     )
   );
 });
